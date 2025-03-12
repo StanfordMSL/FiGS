@@ -6,10 +6,10 @@ import numpy as np
 import figs.utilities.trajectory_helper as th
 
 from pathlib import Path
-from typing import Type,Union,Tuple
+from typing import Type,Union,Tuple,Dict,List
 from acados_template import AcadosSimSolver, AcadosSim
 from figs.control.base_controller import BaseController
-from figs.dynamics.model_equations import export_quadcopter_ode_model
+from figs.dynamics.fext_model import export_fext_ode_model
 from figs.dynamics.model_specifications import generate_specifications
 from figs.render.gsplat import GSplat
 
@@ -158,7 +158,7 @@ class Simulator:
 
         # Generate the simulator
         sim = AcadosSim()
-        sim.model = export_quadcopter_ode_model(drn_spec["m"],drn_spec["tn"])  
+        sim.model = export_fext_ode_model(drn_spec["m"],drn_spec["tn"])  
         sim.solver_options.T = 1/self.conFiG["rollout"]["frequency"]
         sim.solver_options.integrator_type = 'IRK'
 
@@ -179,10 +179,10 @@ class Simulator:
         Simulates the flight.
 
         Args:
-            - t0:       Initial time.
-            - tf:       Final time.
-            - x0:       Initial state.
-            - obj:      Objective to use for the simulation.
+            - t0:   Initial time.
+            - tf:   Final time.
+            - x0:   Initial state.
+            - obj:  Objective to use for the simulation.
         """
 
         # Check if frame is loaded
@@ -198,29 +198,39 @@ class Simulator:
         std_sn = np.array(self.conFiG["rollout"]["sensor_noise"]["std"])
         use_fusion = self.conFiG["rollout"]["sensor_model_fusion"]["use_fusion"]
         Wf = np.diag(self.conFiG["rollout"]["sensor_model_fusion"]["weights"])
+        Fext_con = self.conFiG["rollout"]["external_forces"]
         nx,nu = self.conFiG["drone"]["nx"],self.conFiG["drone"]["nu"]
         cam_cfg = self.conFiG["drone"]["camera"]
         height,width,channels = cam_cfg["height"],cam_cfg["width"],cam_cfg["channels"]
         T_c2b = self.conFiG["drone"]["T_c2b"]
 
         # Derived Variables
-        n_sim2ctl = int(hz_sim/policy.hz)  # Number of simulation steps per control step
+        n_sim2ctl = int(hz_sim/policy.hz)       # Number of simulation steps per control step
         mu_md = mu_md_s*(1/n_sim2ctl)           # Scale model mean noise to control rate
         std_md = std_md_s*(1/n_sim2ctl)         # Scale model std noise to control rate
-        dt = np.round(tf-t0)
-        Nsim = int(dt*hz_sim)
-        Nctl = int(dt*policy.hz)
-        n_delay = int(t_dly*hz_sim)
-        Wf_sn,Wf_md = Wf,1-Wf
+        dt = np.round(tf-t0)                    # Total time
+        Nsim = int(dt*hz_sim)                   # Number of simulation steps
+        Nctl = int(dt*policy.hz)                # Number of control steps
+        n_delay = int(t_dly*hz_sim)             # Number of steps for input delay
+        Wf_sn,Wf_md = Wf,1-Wf                   # Sensor/Model noise fusion weights
+
+        Fext = []
+        if Fext_con is not None:
+            for fext_con in Fext_con:
+                Fext.append({
+                    "lower": np.array(fext_con["lower"]),
+                    "upper": np.array(fext_con["upper"]),
+                    "force": np.array(fext_con["force"])
+                })
 
         # Rollout Variables
         Tro,Xro,Uro = np.zeros(Nctl+1),np.zeros((nx,Nctl+1)),np.zeros((nu,Nctl))
         Iro = np.zeros((Nctl,height,width,channels),dtype=np.uint8)
         Xro[:,0] = x0
+        Fro = np.zeros((3,Nctl))
 
         # Diagnostics Variables
         Tsol = np.zeros((4,Nctl))
-        Adv = np.zeros((nu,Nctl))
         
         # Transient Variables
         xcr,xpr,xsn = x0.copy(),x0.copy(),x0.copy()
@@ -252,7 +262,7 @@ class Simulator:
                 xsn[6:10] = th.obedient_quaternion(xsn[6:10],xpr[6:10])
 
                 # Generate controller command
-                ucm,zcr,adv,tsol = policy.control(tcr,xsn,ucm,obj,icr,zcr)
+                ucm,zcr,tsol = policy.control(tcr,xsn,ucm,obj,icr,zcr)
 
                 # Update delay buffer
                 udl[:,0] = udl[:,1]
@@ -261,10 +271,18 @@ class Simulator:
             # Extract delayed command
             uin = udl[:,0] if i%n_sim2ctl < n_delay else udl[:,1]
 
+            # Add external forces
+            ufe = np.zeros(3)
+            for fext in Fext:
+                if np.all((fext["upper"] <= xcr[0:3]) & (xcr[0:3] <= fext["lower"])):
+                    ufe += fext["force"]
+
+            ucr = np.hstack((uin,ufe))
+
             # Simulate both estimated and actual states
-            xcr = self.solver.simulate(x=xcr,u=uin)
+            xcr = self.solver.simulate(x=xcr,u=ucr)
             if use_fusion:
-                xsn = self.solver.simulate(x=xsn,u=uin)
+                xsn = self.solver.simulate(x=xsn,u=ucr)
 
             # Add model noise
             xcr = xcr + np.random.normal(loc=mu_md,scale=std_md)
@@ -281,10 +299,11 @@ class Simulator:
                 Tro[k] = tcr
                 Xro[:,k+1] = xcr
                 Uro[:,k] = ucm
+                Fro[:,k] = ufe
                 Tsol[:,k] = tsol
-                Adv[:,k] = adv
+
 
         # Log final time
         Tro[Nctl] = t0+Nsim/hz_sim
 
-        return Tro,Xro,Uro,Iro,Tsol,Adv
+        return Tro,Xro,Uro,Iro,Fro,Tsol

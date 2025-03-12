@@ -11,7 +11,7 @@ from copy import deepcopy
 from casadi import vertcat
 from acados_template import AcadosOcp, AcadosOcpSolver
 from figs.control.base_controller import BaseController
-from figs.dynamics.model_equations import export_quadcopter_ode_model
+from figs.dynamics.base_model import export_base_ode_model
 from figs.dynamics.model_specifications import generate_specifications
 from typing import Union, Tuple, Dict
 
@@ -117,7 +117,7 @@ class VehicleRateMPC(BaseController):
         # Initialize Acados OCP
         ocp = AcadosOcp()
 
-        ocp.model = export_quadcopter_ode_model(drn_spec["m"],drn_spec["tn"])        
+        ocp.model = export_base_ode_model(drn_spec["m"],drn_spec["tn"])        
         ocp.model.cost_y_expr = vertcat(ocp.model.x, ocp.model.u)
         ocp.model.cost_y_expr_e = ocp.model.x
 
@@ -208,7 +208,6 @@ class VehicleRateMPC(BaseController):
         Returns:
             - ucr:  Control input.
             - zcr:  Output feature vector (unused).
-            - adv:  Advisor output (unused).
             - tsol: Time taken to solve components [setup ocp, solve ocp, unused, unused].
 
         """
@@ -258,7 +257,7 @@ class VehicleRateMPC(BaseController):
         # Compute timer values
         tsol = np.array([t1-t0,t2-t1,0.0,0.0])
 
-        return ucc,None,None,tsol
+        return ucc,None,tsol
 
     def pad_trajectory(self,fout_wps:Dict[str,Union[str,int,Dict[str,Union[float,np.ndarray]]]],
                        Nhn:int,hz_ctl:float) -> Dict[str,Dict[str,Union[float,np.ndarray]]]:
