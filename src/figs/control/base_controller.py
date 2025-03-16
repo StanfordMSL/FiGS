@@ -4,7 +4,7 @@ import json
 
 from pathlib import Path
 from abc import ABC, abstractmethod
-from typing import Dict,Union,Tuple
+from typing import Dict,Union,Tuple,List
 
 class BaseController(ABC):
     """
@@ -16,7 +16,8 @@ class BaseController(ABC):
     Attributes:
         configs_path:   Path to the directory containing the JSON files.
         hz:             Frequency of the controller.
-        nzcr:           Number of states in the controller.
+        Nznn:           Number of states in the controller.
+        nhy:            History sequence length.
 
     """
     def __init__(self,configs_path:Path=None) -> None:
@@ -34,9 +35,10 @@ class BaseController(ABC):
             self.configs_path = configs_path
 
         # Necessary attributes
-        self.name = None
-        self.hz = None
-        self.nzcr = None
+        self.name:str = None
+        self.hz:int = None
+        self.Nznn:Dict[str,List[torch.Tensor]] = None
+        self.nhy:int = None
 
     @abstractmethod
     def control(self, tcr: float, xcr: np.ndarray,

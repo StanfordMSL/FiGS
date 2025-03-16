@@ -172,7 +172,7 @@ class Simulator:
         self.solver = solver
         self.conFiG["drone"] = drn_spec
     
-    def simulate(self,policy:Type[BaseController],
+    def simulate(self,policy:BaseController,
                  t0:float,tf:int,x0:np.ndarray,obj:Union[None,np.ndarray]=None
                  ) -> Tuple[np.ndarray,np.ndarray,np.ndarray,np.ndarray,np.ndarray,np.ndarray]:
         """
@@ -236,7 +236,7 @@ class Simulator:
         xcr,xpr,xsn = x0.copy(),x0.copy(),x0.copy()
         ucm = np.array([-self.conFiG["drone"]['m']/self.conFiG["drone"]['tn'],0.0,0.0,0.0])
         udl = np.hstack((ucm.reshape(-1,1),ucm.reshape(-1,1)))
-        zcr = torch.zeros(policy.nzcr) if isinstance(policy.nzcr, int) else None
+        zcr = {key: torch.zeros(policy.Nznn[key]) for key in policy.Nznn.keys()}
 
         # Instantiate camera object
         camera = self.gsplat.generate_output_camera(cam_cfg)

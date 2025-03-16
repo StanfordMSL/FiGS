@@ -164,7 +164,8 @@ class VehicleRateMPC(BaseController):
         # Necessary Variables for Base Controller -----------------------------
         self.name = name
         self.hz = hz_ctl
-        self.nzcr = None
+        self.Nznn = {}
+        self.nhy = 0
 
         # ---------------------------------------------------------------------
 
