@@ -189,21 +189,52 @@ class Simulator:
         if self.solver is None:
             raise ValueError("Frame has not been loaded. Please load a frame before simulating.")
 
-        # Unpack Variables
-        hz_sim = self.conFiG["rollout"]["frequency"]
-        t_dly = self.conFiG["rollout"]["delay"]
-        mu_md_s = np.array(self.conFiG["rollout"]["model_noise"]["mean"])
-        std_md_s = np.array(self.conFiG["rollout"]["model_noise"]["std"])
-        mu_sn = np.array(self.conFiG["rollout"]["sensor_noise"]["mean"])
-        std_sn = np.array(self.conFiG["rollout"]["sensor_noise"]["std"])
-        use_fusion = self.conFiG["rollout"]["sensor_model_fusion"]["use_fusion"]
-        Wf = np.diag(self.conFiG["rollout"]["sensor_model_fusion"]["weights"])
-        Fext_con = self.conFiG["rollout"]["external_forces"]
+        # Drone Variables
         nx,nu = self.conFiG["drone"]["nx"],self.conFiG["drone"]["nu"]
         cam_cfg = self.conFiG["drone"]["camera"]
         height,width,channels = cam_cfg["height"],cam_cfg["width"],cam_cfg["channels"]
         T_c2b = self.conFiG["drone"]["T_c2b"]
 
+        # Base Rollout Variables
+        hz_sim = self.conFiG["rollout"]["frequency"]
+        t_dly = self.conFiG["rollout"]["delay"]
+
+        # External Forces Rollout Variables
+        Fext_con:dict = self.conFiG["rollout"]["external_forces"]
+
+        Fext = []
+        if Fext_con is not None:
+            for fext_con in Fext_con.values():
+                Fext.append({
+                    "lower": np.array(fext_con["lower"]),
+                    "upper": np.array(fext_con["upper"]),
+                    "mean": np.array(fext_con["mean"]),
+                    "std": np.array(fext_con["std"])
+                })
+        
+        # Noise Rollout Variables
+        model_noise = self.conFiG["rollout"]["noise"]["model"]
+        sensor_noise = self.conFiG["rollout"]["noise"]["sensor"]
+
+        if model_noise is None:
+            mu_md_s,std_md_s = np.zeros(nx),np.zeros(nx)
+        else:
+            mu_md_s = np.array(model_noise["mean"])
+            std_md_s = np.array(model_noise["std"])
+
+        if sensor_noise is None:
+            mu_sn,std_sn = np.zeros(nx),np.zeros(nx)
+        else:
+            mu_sn = np.array(sensor_noise["mean"])
+            std_sn = np.array(sensor_noise["std"])
+
+        # Fusion Rollout Variables
+        fuse_con = self.conFiG["rollout"]["fusion"]
+
+        use_fusion = False if fuse_con is None else True
+        Wf_md = np.diag(fuse_con) if fuse_con else np.eye(nx)
+        Wf_sn = np.eye(nx)-Wf_md
+        
         # Derived Variables
         n_sim2ctl = int(hz_sim/policy.hz)       # Number of simulation steps per control step
         mu_md = mu_md_s*(1/n_sim2ctl)           # Scale model mean noise to control rate
@@ -212,22 +243,6 @@ class Simulator:
         Nsim = int(dt*hz_sim)                   # Number of simulation steps
         Nctl = int(dt*policy.hz)                # Number of control steps
         n_delay = int(t_dly*hz_sim)             # Number of steps for input delay
-        Wf_sn,Wf_md = Wf,1-Wf                   # Sensor/Model noise fusion weights
-
-        Fext = []
-        if Fext_con is not None:
-            for fext_con in Fext_con:
-                Fext.append({
-                    "lower": np.array(fext_con["lower"]),
-                    "upper": np.array(fext_con["upper"]),
-                    "force": np.array(fext_con["force"])
-                })
-
-        # Rollout Variables
-        Tro,Xro,Uro = np.zeros(Nctl+1),np.zeros((nx,Nctl+1)),np.zeros((nu,Nctl))
-        Iro = np.zeros((Nctl,height,width,channels),dtype=np.uint8)
-        Xro[:,0] = x0
-        Fro = np.zeros((3,Nctl))
 
         # Diagnostics Variables
         Tsol = np.zeros((4,Nctl))
@@ -240,6 +255,12 @@ class Simulator:
 
         # Instantiate camera object
         camera = self.gsplat.generate_output_camera(cam_cfg)
+
+        # Trajectory Rollout Variables
+        Tro,Xro,Uro = np.zeros(Nctl+1),np.zeros((nx,Nctl+1)),np.zeros((nu,Nctl))
+        Iro = np.zeros((Nctl,height,width,channels),dtype=np.uint8)
+        Xro[:,0] = x0
+        Fro = np.zeros((3,Nctl))
 
         # Rollout
         for i in range(Nsim):
@@ -274,8 +295,9 @@ class Simulator:
             # Add external forces
             ufe = np.zeros(3)
             for fext in Fext:
-                if np.all((fext["upper"] <= xcr[0:3]) & (xcr[0:3] <= fext["lower"])):
-                    ufe += fext["force"]
+                if np.all((xcr[0:3] <= fext["upper"]) & (xcr[0:3] >= fext["lower"])):
+                    force = np.random.normal(loc=fext["mean"],scale=fext["std"])
+                    ufe += force
 
             ucr = np.hstack((uin,ufe))
 
@@ -301,7 +323,6 @@ class Simulator:
                 Uro[:,k] = ucm
                 Fro[:,k] = ufe
                 Tsol[:,k] = tsol
-
 
         # Log final time
         Tro[Nctl] = t0+Nsim/hz_sim
