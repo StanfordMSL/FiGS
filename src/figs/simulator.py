@@ -4,13 +4,13 @@ import json
 import torch
 import numpy as np
 import figs.utilities.trajectory_helper as th
+import figs.dynamics.quadcopter_model as qm
+import figs.dynamics.quadcopter_specifications as qs
 
 from pathlib import Path
-from typing import Type,Union,Tuple,Dict,List
+from typing import Union,Tuple
 from acados_template import AcadosSimSolver, AcadosSim
 from figs.control.base_controller import BaseController
-from figs.dynamics.fext_model import export_fext_ode_model
-from figs.dynamics.model_specifications import generate_specifications
 from figs.render.gsplat import GSplat
 
 class Simulator:
@@ -19,7 +19,7 @@ class Simulator:
     """
 
     def __init__(self,
-                 scene_name:str,rollout_name:str='baseline',
+                 scene_name:str,rollout_name:str,
                  frame_name:Union[None,str]=None,
                  configs_path:Path=None,gsplats_path:Path=None) -> None:
         """
@@ -63,14 +63,29 @@ class Simulator:
         # Instantiate empty attributes
         self.gsplat = None
         self.conFiG = {"rollout":{},"drone":{}}
-        self.solver = None
 
-        # Load the attributes
+        # Load the base attributes
         self.load_scene(scene_name)
         self.load_rollout(rollout_name)
 
+        # Instantiate the dynamics solver
+        sim_json = 'figs_sim_solver.json'
+
+        sim = AcadosSim()
+        sim.model = qm.export_model()
+        sim.parameter_values = np.zeros(sim.model.p.shape)
+        sim.solver_options.T = 1/self.conFiG["rollout"]["frequency"]
+        sim.solver_options.integrator_type = 'IRK'
+        
+        self.solver = AcadosSimSolver(sim, json_file=sim_json, verbose=False)
+
+        # Load the frame if provided
         if frame_name is not None:
             self.load_frame(frame_name)
+
+        # Clean up the ACADOS generation files
+        os.remove(os.path.join(os.getcwd(),sim_json))
+        shutil.rmtree(sim.code_export_directory)
 
     def load_scene(self, scene_name:str):
         """
@@ -149,29 +164,12 @@ class Simulator:
         else:
             frame_config = frame
 
-        # Clear previous solver
-        del self.solver
-        
         # Some useful intermediate variables
-        drn_spec = generate_specifications(frame_config)
-        sim_json = 'figs_sim_solver.json'
+        drn_spec = qs.generate_specifications(frame_config)
 
-        # Generate the simulator
-        sim = AcadosSim()
-        sim.model = export_fext_ode_model(drn_spec["m"],drn_spec["tn"])  
-        sim.solver_options.T = 1/self.conFiG["rollout"]["frequency"]
-        sim.solver_options.integrator_type = 'IRK'
-
-        solver = AcadosSimSolver(sim, json_file=sim_json, verbose=False)
-
-        # Clean up the ACADOS generation files
-        os.remove(os.path.join(os.getcwd(),sim_json))
-        shutil.rmtree(sim.code_export_directory)
-        
         # Update attribute(s)
-        self.solver = solver
         self.conFiG["drone"] = drn_spec
-    
+
     def simulate(self,policy:BaseController,
                  t0:float,tf:int,x0:np.ndarray,obj:Union[None,np.ndarray]=None
                  ) -> Tuple[np.ndarray,np.ndarray,np.ndarray,np.ndarray,np.ndarray,np.ndarray]:
@@ -191,6 +189,7 @@ class Simulator:
 
         # Drone Variables
         nx,nu = self.conFiG["drone"]["nx"],self.conFiG["drone"]["nu"]
+        m,tn = self.conFiG["drone"]["m"],self.conFiG["drone"]["tn"]
         cam_cfg = self.conFiG["drone"]["camera"]
         height,width,channels = cam_cfg["height"],cam_cfg["width"],cam_cfg["channels"]
         T_c2b = self.conFiG["drone"]["T_c2b"]
@@ -290,7 +289,7 @@ class Simulator:
                 udl[:,1] = ucm
 
             # Extract delayed command
-            uin = udl[:,0] if i%n_sim2ctl < n_delay else udl[:,1]
+            ucr = udl[:,0] if i%n_sim2ctl < n_delay else udl[:,1]
 
             # Add external forces
             ufe = np.zeros(3)
@@ -298,13 +297,12 @@ class Simulator:
                 if np.all((xcr[0:3] <= fext["upper"]) & (xcr[0:3] >= fext["lower"])):
                     force = np.random.normal(loc=fext["mean"],scale=fext["std"])
                     ufe += force
-
-            ucr = np.hstack((uin,ufe))
+            pcr = np.hstack((m,tn,ufe))
 
             # Simulate both estimated and actual states
-            xcr = self.solver.simulate(x=xcr,u=ucr)
+            xcr = self.solver.simulate(x=xcr,u=ucr,p=pcr)
             if use_fusion:
-                xsn = self.solver.simulate(x=xsn,u=ucr)
+                xsn = self.solver.simulate(x=xsn,u=ucr,p=pcr)
 
             # Add model noise
             xcr = xcr + np.random.normal(loc=mu_md,scale=std_md)

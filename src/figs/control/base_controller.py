@@ -67,7 +67,7 @@ class BaseController(ABC):
         """
         pass
 
-    def load_json_config(self, config:str, name:str) -> Dict:
+    def load_json_config(self, config:str, name:Union[None,str]) -> Dict:
         """
         Load a JSON configuration file.
 
@@ -79,16 +79,22 @@ class BaseController(ABC):
             config: Dictionary containing the configuration.
         
         """
+
+        # Get available configs
+        configs_avail = [file.stem for file in (self.configs_path/config).iterdir()]
+
+        if name is None:
+            name = configs_avail[0]
+        elif name not in configs_avail:
+            raise ValueError(f"Configuration '{name}' not found in '{config}'.")
+
         json_config = self.configs_path/config/(name+".json")
 
-        if not json_config.exists():
-            raise ValueError(f"The json file '{json_config}' does not exist.")
-        else:
-            # Load the json configuration
-            with open(json_config) as file:
-                config = json.load(file)
-            
-            # Add the name to the configuration
-            config["name"] = name
+        # Load the json configuration
+        with open(json_config) as file:
+            config = json.load(file)
+        
+        # Add the name to the configuration
+        config["name"] = name
 
         return config

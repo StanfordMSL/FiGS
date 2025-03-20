@@ -5,21 +5,21 @@ import numpy as np
 import scipy.linalg
 import figs.tsplines.min_snap as ms
 import figs.utilities.trajectory_helper as th
+import figs.dynamics.quadcopter_model as qm
+import figs.dynamics.quadcopter_specifications as qs
 
 from pathlib import Path
 from copy import deepcopy
 from casadi import vertcat
 from acados_template import AcadosOcp, AcadosOcpSolver
 from figs.control.base_controller import BaseController
-from figs.dynamics.base_model import export_base_ode_model
-from figs.dynamics.model_specifications import generate_specifications
 from typing import Union, Tuple, Dict
 
 class VehicleRateMPC(BaseController):
     def __init__(self, 
                  course:str,
                  policy:str,
-                 frame:str,
+                 frame:str=None,
                  name:str="vrmpc",
                  configs_path:Path=None,
                  use_RTI:bool=False) -> None:
@@ -41,6 +41,9 @@ class VehicleRateMPC(BaseController):
 
             - Nx:              Number of states.
             - Nu:              Number of inputs.
+            - p:               Model Parameters. (mass,thrust,fx,fy,fz)
+            - Tpi:             Ideal TSpline time vector.
+            - CPi:             Ideal TSpline control points.
             - tXUd:            Desired trajectory.
             - Qk:              State cost.
             - Rk:              Input cost.
@@ -64,21 +67,21 @@ class VehicleRateMPC(BaseController):
         super().__init__(configs_path)
 
         # Load JSON Configurations
-        if type(course) is str:
-            course_config  = self.load_json_config("course",course)
+        if type(course) is dict:
+            course_config  = course
         else:
-            course_config = course
+            course_config = self.load_json_config("course",course)
 
-        if type(policy) is str:
-            policy_config = self.load_json_config("policy",policy)
-        else:
+        if type(policy) is dict:
             policy_config = policy
-
-        if type(frame) is str:
-            frame_config = self.load_json_config("frame",frame)
         else:
-            frame_config = frame
+            policy_config = self.load_json_config("policy",policy)
 
+        if type(frame) is dict:
+            frame_config = frame
+        else:
+            frame_config = self.load_json_config("frame",frame)
+        
         # MPC Parameters
         Nhn = policy_config["horizon"]
         Qk,Rk,QN = np.diag(policy_config["Qk"]),np.diag(policy_config["Rk"]),np.diag(policy_config["QN"])
@@ -90,8 +93,9 @@ class VehicleRateMPC(BaseController):
 
         # Derived Parameters
         traj_config_pd = self.pad_trajectory(course_config,Nhn,hz_ctl)
-        drn_spec = generate_specifications(frame_config)
+        drn_spec = qs.generate_specifications(frame_config)
         nx,nu = drn_spec["nx"], drn_spec["nu"]
+        m,tn = drn_spec["m"],drn_spec["tn"]
 
         ny,ny_e = nx+nu,nx
         solver_json = 'figs_ocp_solver.json'
@@ -117,7 +121,8 @@ class VehicleRateMPC(BaseController):
         # Initialize Acados OCP
         ocp = AcadosOcp()
 
-        ocp.model = export_base_ode_model(drn_spec["m"],drn_spec["tn"])        
+        ocp.model = qm.export_model()        
+        ocp.parameter_values = np.zeros(ocp.model.p.shape)
         ocp.model.cost_y_expr = vertcat(ocp.model.x, ocp.model.u)
         ocp.model.cost_y_expr_e = ocp.model.x
 
@@ -171,6 +176,8 @@ class VehicleRateMPC(BaseController):
 
         # Controller Specific Variables
         self.Nx,self.Nu = nx,nu
+        self.p = np.hstack((m,tn,np.zeros(3)))
+        self.Tpi,self.CPi = Tpi,CPi
         self.tXUd = 1.0*tXUd
         self.Qk,self.Rk,self.QN = Qk,Rk,QN
         self.Ws = Ws
@@ -185,6 +192,28 @@ class VehicleRateMPC(BaseController):
         
         for _ in range(5):
             self.control(0.0,tXUd[1:11,0])
+
+    def update_frame(self,frame:str) -> None:
+        """
+        Method to update the frame related variables of the controller.
+        
+        Args:
+            - frame: Name/Config Dict of the frame.
+        """
+
+        if type(frame) is str:
+            frame_config = self.load_json_config("frame",frame)
+        else:
+            frame_config = frame
+
+        drn_spec = qs.generate_specifications(frame_config)
+        nx,nu = drn_spec["nx"], drn_spec["nu"]
+        m,tn = drn_spec["m"],drn_spec["tn"]
+        tXUd = th.TS_to_tXU(self.Tpi,self.CPi,drn_spec,self.hz)
+
+        self.Nx,self.Nu = nx,nu
+        self.tXUd = 1.0*tXUd
+        self.p = np.hstack((m,tn,np.zeros(3)))
 
     def control(self,
                 tcr:float,xcr:np.ndarray,
@@ -226,6 +255,7 @@ class VehicleRateMPC(BaseController):
             self.solver.cost_set(i, "yref", ydes[:,i])
             self.solver.set(i,'x',ydes[0:10,i])
             self.solver.set(i,'u',ydes[10:,i])
+            self.solver.set(i,'p',self.p)
 
         self.solver.cost_set(self.solver.acados_ocp.dims.N, "yref", ydes[0:10,-1])
         self.solver.set(self.solver.acados_ocp.dims.N,'x',ydes[0:10,-1])
