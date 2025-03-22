@@ -75,7 +75,7 @@ class VehicleRateMPC(BaseController):
         if type(policy) is dict:
             policy_config = policy
         else:
-            policy_config = self.load_json_config("policy",policy)
+            policy_config = self.load_json_config("pilots",policy)
 
         if type(frame) is dict:
             frame_config = frame
