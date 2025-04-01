@@ -56,9 +56,9 @@ def generate_specifications(
     # Unpack the params dictionary ===========================================
     m,Impp = drn_prms["mass"],drn_prms["massless_inertia"]
     lf,lb = drn_prms["arm_front"],drn_prms["arm_back"]
-    fn,tG = drn_prms["force_normalized"],drn_prms["torque_gain"]
-    n_rtr = drn_prms["number_of_rotors"]
-    T_c2b = drn_prms["camera_to_body_transform"]
+    kt,kq = drn_prms["motor_thrust_coeff"],drn_prms["motor_torque_coeff"]
+    Nrtr = drn_prms["number_of_rotors"]
+    Tc2b = drn_prms["camera_to_body_transform"]
     camera = drn_prms["camera"]
 
     # Initialize the dictionary
@@ -70,25 +70,25 @@ def generate_specifications(
     quad["m"],quad["I"] = m,m*np.diag(Impp)
     quad["lf"] = np.array(lf)
     quad["lb"] = np.array(lb)
-    quad["fn"],quad["tg"] = fn, tG
+    quad["kt"],quad["kq"] = kt, kq
 
     # Model Constants
     quad["nx"],quad["nu"] = nx,nu
-    quad["n_rtr"] = n_rtr
-    quad["T_c2b"] = np.array(T_c2b)
+    quad["Nrtr"] = Nrtr
+    quad["Tc2b"] = np.array(Tc2b)
     quad["camera"] = camera
 
     # Derive Quadcopter Constants
-    fMw = fn*np.array([
-            [   -1.0,   -1.0,   -1.0,   -1.0],
-            [ -lf[1],  lf[1],  lb[1], -lb[1]],
-            [  lf[0], -lb[0],  lf[0], -lb[0]],
-            [     tG,     tG,    -tG,    -tG]])
+    fMw = kt*np.array([
+            [  -1.0,   -1.0,   -1.0,    -1.0],
+            [-lf[1],  lf[1],  lb[1],  -lb[1]],
+            [ lf[0], -lb[0],  lf[0],  -lb[0]],
+            [ kt/kq,  kt/kq, -kt/kq, -kt/kq]])
     
     quad["Iinv"] = np.diag(1/(m*np.array(Impp)))
-    quad["fMw"] = fMw
-    quad["wMf"] = np.linalg.inv(fMw)
-    quad["tn"] = fn*n_rtr
+    quad["fMw"]  = fMw
+    quad["wMf"]  = np.linalg.inv(fMw)
+    quad["kt_sum"] = kt*Nrtr
 
     # name
     quad["name"] = name

@@ -31,12 +31,12 @@ def export_model() -> AcadosModel:
     
     # set up parameters (p)
     m = SX.sym('m')
-    tn = SX.sym('tn')
+    kt = SX.sym('kt')
     fx = SX.sym('fx')
     fy = SX.sym('fy')
     fz = SX.sym('fz')
     
-    p = vertcat(m,tn,fx,fy,fz)
+    p = vertcat(m,kt,fx,fy,fz)
 
     # xdot
     px_dot = SX.sym('px_dot')
@@ -59,7 +59,7 @@ def export_model() -> AcadosModel:
 
     # some intermediate variables
     V1a = vertcat(0.0, 0.0, 9.81)
-    V1b = (tn*uf/m)*vertcat(
+    V1b = (4*kt*uf/m)*vertcat(
             2.0*(qx*qz + qy*qw),
             2.0*(qy*qz - qx*qw),
             qw*qw - qx*qx - qy*qy + qz*qz

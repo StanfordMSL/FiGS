@@ -4,8 +4,7 @@ import scipy.linalg as spl
 import sys
 import math
 import qpsolvers
-
-from typing import Union,Tuple,Optional,Dict,List
+import figs.utilities.trajectory_helper as th
 
 # Debugging
 np.set_printoptions(threshold=sys.maxsize)
@@ -16,24 +15,26 @@ Nfo = 4                                                         # Number of Flat
 kdr = np.array([4,4,4,2])                                       # Target derivative to minimize
 mu  = np.array([1.0,1.0,1.0,1.0])                               # Scaling for each parameter
 
-def solve(fout_wps:Dict[str,Union[int,Tuple[np.float64,np.ndarray]]],Natt=5) -> Optional[Tuple[np.ndarray,np.ndarray]]:
+def solve(WPs:dict[str,int|tuple[np.float64,np.ndarray]],hz:int=20,
+          Natt=5) -> dict[str,tuple[np.ndarray,np.ndarray]]:
     """
     Solve the minimum snap trajectory planning problem.
 
     Args:
-    fout_wps:   Dictionary containing the flat waypoints.
-    Natt:       Number of attempts to solve the QP problem.
+        config: Dictionary containing the course configuration.
+        Natt:   Number of attempts to solve the QP problem.
 
     Returns:
-    Tps:        Time vector for each keyframe.
-    CPs:        Coefficient matrix for each keyframe.
+        output: Dictionary containing the solution in its various forms.
 
     """
+
+
     # Unpack data from dictionary
-    keyframes: Dict[str,Tuple[np.float64,np.ndarray]] = fout_wps["keyframes"]
+    keyframes:dict = WPs["keyframes"]
     Tp = [item['t'] for item in keyframes.values()]
     FOp = [np.array(item['fo'],dtype=float) for item in keyframes.values()]
-    Nco = fout_wps["Nco"]
+    Nco = WPs["Nco"]
 
     # Generate QP Terms
     P,q = Pq_gen(Tp,Nco)                                           # Min Snap Cost
@@ -55,19 +56,23 @@ def solve(fout_wps:Dict[str,Union[int,Tuple[np.float64,np.ndarray]]],Natt=5) -> 
             for i in range(0,Nsm):
                 TT[i,:] = np.linspace(Tp[i],Tp[i+1],Nco)
             
-            Tps = np.array(Tp)
-            CPs = SM2CP(SM,TT,Nco)
+            Tps,CPs = np.array(Tp),SM2CP(SM,TT,Nco)
+            Tss,FOs = th.TpCP_to_TsFO(Tps,CPs,hz)          # Convert to Flat Output
+            
+            # Package Output
+            output = {
+                "CP": (Tps,CPs),
+                "FO": (Tss,FOs),
+            }
 
-            return Tps,CPs
+            return output
         
         except:
             print(f"Minimum Snap Trajectory Solve Failed (Attempt {attempt + 1}) failed. Retrying...")
             if attempt == Natt - 1:
-                print("All attempts failed.")
-                
-                return None
+                raise Exception("Minimum Snap Trajectory Solve Failed. Please check the input data.")
     
-def Pq_gen(Tp:List[np.float64],Nco:int) -> Tuple[np.ndarray,np.ndarray]:
+def Pq_gen(Tp:list[float],Nco:int) -> tuple[np.ndarray,np.ndarray]:
     # Unpack some stuff
     Nsm = len(Tp)-1            # Number of segments
 
@@ -85,7 +90,7 @@ def Pq_gen(Tp:List[np.float64],Nco:int) -> Tuple[np.ndarray,np.ndarray]:
 
     return P,q
 
-def Ps_gen(kdr:np.float64,t0:np.float64,tf:np.float64,Nco:int) -> np.ndarray:
+def Ps_gen(kdr:float,t0:float,tf:float,Nco:int) -> np.ndarray:
     Ps = np.zeros((Nco,Nco))
     for i in range(kdr,Nco):
         for j in range(i,Nco):
@@ -100,7 +105,7 @@ def Ps_gen(kdr:np.float64,t0:np.float64,tf:np.float64,Nco:int) -> np.ndarray:
 
     return Ps
 
-def Ab_gen(Tp:List[np.float64],FOp:List[np.ndarray],Nco:int) -> Tuple[np.ndarray,np.ndarray]:
+def Ab_gen(Tp:list[float],FOp:list[np.ndarray],Nco:int) -> tuple[np.ndarray,np.ndarray]:
     # Some useful intermediate variables
     Nsm = len(Tp)-1                            # Number of segments
 
@@ -153,7 +158,7 @@ def cf_gen(N:int,k:int) -> np.float64:
 
     return cfac
 
-def poly2kdr(t:np.float64,kdr:int,Nco:int) -> np.ndarray:
+def poly2kdr(t:float,kdr:int,Nco:int) -> np.ndarray:
     a = np.zeros(Nco)
     for i in range(kdr,Nco):
         c1 = cf_gen(i,kdr)

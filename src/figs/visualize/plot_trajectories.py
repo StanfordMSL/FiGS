@@ -5,7 +5,7 @@ import figs.utilities.trajectory_helper as th
 from scipy.spatial.transform import Rotation as R
 from typing import Union,Tuple,List
 
-def plot_tXU_spatial(tXUs:Union[np.ndarray,List[np.ndarray]],
+def plot_tXU_3D(tXUs:Union[np.ndarray,List[np.ndarray]],
                      n_fr:int=None) -> None:
     """
     Plot the spatial trajectory.
@@ -111,7 +111,7 @@ def plot_tXU_time(tXUs:Union[np.ndarray,List[np.ndarray]]) -> None:
     plt.tight_layout()
     plt.show(block=False)
 
-def plot_RO_spatial(ROs:Union[
+def plot_RO_3D(ROs:Union[
                             Tuple[np.ndarray,np.ndarray,np.ndarray],
                             List[Tuple[np.ndarray,np.ndarray,np.ndarray]]],
                             n_fr:int=None) -> None:
@@ -134,7 +134,7 @@ def plot_RO_spatial(ROs:Union[
         tXUs.append(th.RO_to_tXU(RO))
 
     # Plot the spatial trajectory
-    plot_tXU_spatial(tXUs,n_fr)
+    plot_tXU_3D(tXUs,n_fr)
     
 def plot_RO_time(ROs:Union[
                         Tuple[np.ndarray,np.ndarray,np.ndarray],

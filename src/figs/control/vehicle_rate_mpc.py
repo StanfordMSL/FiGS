@@ -6,34 +6,33 @@ import scipy.linalg
 import figs.tsplines.min_snap as ms
 import figs.utilities.trajectory_helper as th
 import figs.dynamics.quadcopter_model as qm
-import figs.dynamics.quadcopter_specifications as qs
 
 from pathlib import Path
 from copy import deepcopy
 from casadi import vertcat
 from acados_template import AcadosOcp, AcadosOcpSolver
 from figs.control.base_controller import BaseController
-from typing import Union, Tuple, Dict
+from figs.dynamics.external_forces import ExternalForces
 
 class VehicleRateMPC(BaseController):
-    def __init__(self, 
-                 course:str,
-                 policy:str,
-                 frame:str=None,
+    def __init__(self,
+                 policy:dict,course:dict,frame:dict=None,
+                 use_RTI:bool=False,
                  name:str="vrmpc",
                  configs_path:Path=None,
-                 use_RTI:bool=False) -> None:
+                 solver_json:str='figs_ocp_solver.json',) -> None:
         
         """
         Constructor for the VehicleRateMPC class.
         
         Args:
-            - course:       Name/Config Dict of the course.
-            - policy:       Name/Config Dict of the controller.
-            - frame:        Name/Config Dict of the frame.
-            - configs_path: Path to the directory containing the JSON files.
+            - policy:       Config Dict of the policy.
+            - course:       Config Dict of the course.
+            - frame:        Config Dict of the (drone) frame.
             - use_RTI:      Use RTI flag.
             - name:         Name of the controller.
+            - configs_path: Path to the directory containing the JSON files.
+            - solver_json:  Name of the solver JSON file.
 
         Variables:
             - hz:              Controller frequency.
@@ -42,15 +41,16 @@ class VehicleRateMPC(BaseController):
             - Nx:              Number of states.
             - Nu:              Number of inputs.
             - p:               Model Parameters. (mass,thrust,fx,fy,fz)
-            - Tpi:             Ideal TSpline time vector.
-            - CPi:             Ideal TSpline control points.
+            - Tpd:             Ideal TSpline time vector.
+            - CPd:             Ideal TSpline control points.
             - tXUd:            Desired trajectory.
+            - Fext:            External forces.
             - Qk:              State cost.
             - Rk:              Input cost.
             - QN:              Final state cost.
-            - Ws:              State cost.
             - lbu:             Lower bound on inputs.
             - ubu:             Upper bound on inputs.
+            - Ws:              Search cost.
             - ns:              Number of states to consider.
             - use_RTI:         Use RTI flag.
             - model:           Model of the system.
@@ -66,54 +66,32 @@ class VehicleRateMPC(BaseController):
         # Initialize the BaseController
         super().__init__(configs_path)
 
-        # Load JSON Configurations
-        if type(course) is dict:
-            course_config  = course
-        else:
-            course_config = self.load_json_config("course",course)
+        # (MPC) Policy Parameters
+        hz_ctl,Nhn,Ws = policy["hz"],policy["horizon"],np.diag(policy["Ws"])
+        Qk,Rk,QN = np.diag(policy["Qk"]),np.diag(policy["Rk"]),np.diag(policy["QN"])
+        lbu,ubu = np.array(policy["bounds"]["lower"]),np.array(policy["bounds"]["upper"])
 
-        if type(policy) is dict:
-            policy_config = policy
-        else:
-            policy_config = self.load_json_config("pilots",policy)
-
-        if type(frame) is dict:
-            frame_config = frame
-        else:
-            frame_config = self.load_json_config("frame",frame)
-        
-        # MPC Parameters
-        Nhn = policy_config["horizon"]
-        Qk,Rk,QN = np.diag(policy_config["Qk"]),np.diag(policy_config["Rk"]),np.diag(policy_config["QN"])
-        Ws = np.diag(policy_config["Ws"])
-
-        # Control Parameters
-        hz_ctl= policy_config["hz"]
-        lbu,ubu = np.array(policy_config["bounds"]["lower"]),np.array(policy_config["bounds"]["upper"])
-
-        # Derived Parameters
-        traj_config_pd = self.pad_trajectory(course_config,Nhn,hz_ctl)
-        drn_spec = qs.generate_specifications(frame_config)
-        nx,nu = drn_spec["nx"], drn_spec["nu"]
-        m,tn = drn_spec["m"],drn_spec["tn"]
-
+        nx,nu = len(policy["Qk"]), len(policy["Rk"])
+        ns = int(hz_ctl/5)
         ny,ny_e = nx+nu,nx
-        solver_json = 'figs_ocp_solver.json'
-        
-        # =====================================================================
-        # Compute Desired Trajectory
-        # =====================================================================
 
-        # Solve Padded Trajectory
-        output = ms.solve(traj_config_pd)
-        if output is not False:
-            Tpi, CPi = output
+        # Course Parameters
+        WPs = course["waypoints"]
+        Fcfg = course["forces"]
+
+        WPs_pd = self.pad_trajectory(WPs,Nhn,hz_ctl)
+        Tsd,FOd = ms.solve(WPs_pd,hz_ctl)["FO"]
+        Fex = ExternalForces(Fcfg)
+
+        # Frame Parameters
+        if frame is None:       # Use placeholder values
+            m,kt = 1.0,7.0
         else:
-            raise ValueError("Padded trajectory (for VehicleRateMPC) not feasible. Aborting.")
-        
-        # Convert to desired tXU
-        tXUd = th.TS_to_tXU(Tpi,CPi,drn_spec,hz_ctl)
+            m,kt = frame["mass"],frame["motor_thrust_coeff"]
 
+        p = np.hstack((m,kt,np.zeros(3)))
+        tXUd = th.TsFO_to_tXU(Tsd,FOd,m,kt,Fex)
+        
         # =====================================================================
         # Setup Acados Variables
         # =====================================================================
@@ -176,50 +154,43 @@ class VehicleRateMPC(BaseController):
 
         # Controller Specific Variables
         self.Nx,self.Nu = nx,nu
-        self.p = np.hstack((m,tn,np.zeros(3)))
-        self.Tpi,self.CPi = Tpi,CPi
-        self.tXUd = 1.0*tXUd
+        self.Tsd,self.FOd = Tsd,FOd
+        self.tXUd,self.Fex = tXUd,Fex
+        self.p = p
         self.Qk,self.Rk,self.QN = Qk,Rk,QN
-        self.Ws = Ws
         self.lbu,self.ubu = lbu,ubu
-        self.ns = int(hz_ctl/5)
+        self.Ws = Ws
+        self.ns = ns
         self.use_RTI = use_RTI
         self.solver = solver
 
         # =====================================================================
         # Warm start the solver
         # =====================================================================
-        
+
         for _ in range(5):
             self.control(0.0,tXUd[1:11,0])
 
-    def update_frame(self,frame:str) -> None:
+    def update_frame(self,frame:dict) -> None:
         """
         Method to update the frame related variables of the controller.
         
         Args:
-            - frame: Name/Config Dict of the frame.
+            - frame: Config Dict of the (drone) frame.
+
         """
+        m,kt = frame["mass"],frame["motor_thrust_coeff"]
+        
+        tXUd = th.TsFO_to_tXU(self.Tsd,self.FOd,m,kt,self.Fex)
 
-        if type(frame) is str:
-            frame_config = self.load_json_config("frame",frame)
-        else:
-            frame_config = frame
-
-        drn_spec = qs.generate_specifications(frame_config)
-        nx,nu = drn_spec["nx"], drn_spec["nu"]
-        m,tn = drn_spec["m"],drn_spec["tn"]
-        tXUd = th.TS_to_tXU(self.Tpi,self.CPi,drn_spec,self.hz)
-
-        self.Nx,self.Nu = nx,nu
-        self.tXUd = 1.0*tXUd
-        self.p = np.hstack((m,tn,np.zeros(3)))
+        self.p[0],self.p[1] = m,kt
+        self.tXUd = tXUd
 
     def control(self,
                 tcr:float,xcr:np.ndarray,
                 upr:np.ndarray=None,
                 obj:np.ndarray=None,
-                icr:None=None,zcr:None=None) -> Tuple[
+                icr:None=None,zcr:None=None) -> tuple[
                     np.ndarray,None,None,np.ndarray]:
         
         """
@@ -249,6 +220,9 @@ class VehicleRateMPC(BaseController):
 
         # Get desired trajectory
         ydes = self.get_ydes(tcr,xcr)
+
+        # Get external forces
+        self.p[2:5] = self.Fex.get_forces(xcr[0:6])
 
         # Set desired trajectory
         for i in range(self.solver.acados_ocp.dims.N):
@@ -290,34 +264,31 @@ class VehicleRateMPC(BaseController):
 
         return ucc,None,tsol
 
-    def pad_trajectory(self,fout_wps:Dict[str,Union[str,int,Dict[str,Union[float,np.ndarray]]]],
-                       Nhn:int,hz_ctl:float) -> Dict[str,Dict[str,Union[float,np.ndarray]]]:
+    def pad_trajectory(self,WPs:dict,Nhn:int,hz_ctl:float) -> dict:
         """
         Method to pad the trajectory with the final waypoint so that the MPC horizon is satisfied at the end of the trajectory.
 
         Args:
-            - fout_wps:   Dictionary containing the flat output waypoints.
+            - WPs:   Dictionary containing the flat output waypoints.
             - Nhn:        Prediction horizon.
             - hz_ctl:     Controller frequency.
 
         Returns:
-            - fout_wps_pd: Padded flat output waypoints.
+            - WPs_pd: Padded flat output waypoints.
 
         """
 
         # Get final waypoint
-        kff = list(fout_wps["keyframes"])[-1]
+        kff = list(WPs["keyframes"])[-1]
         
         # Pad trajectory
-        t_pd = fout_wps["keyframes"][kff]["t"]+(Nhn/hz_ctl)
-        fo_pd = np.array(fout_wps["keyframes"][kff]["fo"])[:,0:3].tolist()
+        t_pd = WPs["keyframes"][kff]["t"]+(Nhn/hz_ctl)
+        fo_pd = np.array(WPs["keyframes"][kff]["fo"])[:,0:3].tolist()
 
-        fout_wps_pd = deepcopy(fout_wps)
-        fout_wps_pd["keyframes"]["fof"] = {
-            "t":t_pd,
-            "fo":fo_pd}
+        WPs_pd = deepcopy(WPs)
+        WPs_pd["keyframes"]["fof"] = {"t":t_pd,"fo":fo_pd}
 
-        return fout_wps_pd
+        return WPs_pd
 
     def get_ydes(self,tcr:float,xcr:np.ndarray) -> np.ndarray:
         """
