@@ -60,6 +60,8 @@ def generate_specifications(
     Nrtr = drn_prms["number_of_rotors"]
     Tc2b = drn_prms["camera_to_body_transform"]
     camera = drn_prms["camera"]
+    fx,fy = camera["fx"], camera["fy"]
+    cx,cy = camera["cx"], camera["cy"]
 
     # Initialize the dictionary
     quad = {}
@@ -76,6 +78,12 @@ def generate_specifications(
     quad["nx"],quad["nu"] = nx,nu
     quad["Nrtr"] = Nrtr
     quad["Tc2b"] = np.array(Tc2b)
+    quad["K"] = np.array([
+        [ fx, 0.0,  cx],
+        [0.0,  fy,  cy],
+        [0.0, 0.0, 1.0]
+    ])
+
     quad["camera"] = camera
 
     # Derive Quadcopter Constants

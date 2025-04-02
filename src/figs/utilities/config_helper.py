@@ -51,6 +51,7 @@ def get_gsplat(scene_name:str, gsplats_path:Path=None):
     if gsplats_path is None:
         gsplats_path = Path(__file__).parent.parent.parent.parent.parent/'gsplats'
 
+    curr_path = Path.cwd()
     wspace_path = gsplats_path/'workspace'
     search_path = wspace_path/'outputs'/scene_name
     
@@ -67,6 +68,6 @@ def get_gsplat(scene_name:str, gsplats_path:Path=None):
     # Load GSplat (from the workspace directory to avoid path issues)
     os.chdir(wspace_path)
     gsplat = GSplat(gsplat_config)
-    os.chdir(wspace_path)
+    os.chdir(curr_path)
 
     return gsplat
