@@ -29,7 +29,6 @@ def solve(WPs:dict[str,int|tuple[np.float64,np.ndarray]],hz:int=20,
 
     """
 
-
     # Unpack data from dictionary
     keyframes:dict = WPs["keyframes"]
     Tp = [item['t'] for item in keyframes.values()]
@@ -50,7 +49,7 @@ def solve(WPs:dict[str,int|tuple[np.float64,np.ndarray]],hz:int=20,
             sigma = qpsolvers.solve_qp(P,q,G=None,h=None,A=A,b=b,
                                     solver="osqp")       # Solve QP
             SM = sigma.reshape((-1,Nfo,Nco))                                # Reshape to match keyframes
-            
+
             Nsm = SM.shape[0]
             TT = np.zeros((Nsm,Nco))
             for i in range(0,Nsm):
@@ -61,6 +60,7 @@ def solve(WPs:dict[str,int|tuple[np.float64,np.ndarray]],hz:int=20,
             
             # Package Output
             output = {
+                "QP": {"P":P,"q":q,"x":sigma,"A":A,"b":b},
                 "CP": (Tps,CPs),
                 "FO": (Tss,FOs),
             }
