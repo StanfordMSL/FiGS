@@ -4,7 +4,7 @@ import scipy.linalg as spl
 import sys
 import math
 import qpsolvers
-import figs.utilities.trajectory_helper as th
+import figs.utilities.transform_helper as th
 
 # Debugging
 np.set_printoptions(threshold=sys.maxsize)

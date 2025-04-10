@@ -2,7 +2,8 @@ import os
 import shutil
 import torch
 import numpy as np
-import figs.utilities.trajectory_helper as th
+import figs.utilities.transform_helper as th
+import figs.utilities.orientation_helper as oh
 import figs.dynamics.quadcopter_model as qm
 import figs.dynamics.quadcopter_specifications as qs
 
@@ -174,7 +175,7 @@ class Simulator:
                     xsn = Wf_sn@xsn + Wf_md@xcr
                 else:
                     xsn = xcr + np.random.normal(loc=mu_sn,scale=std_sn)
-                xsn[6:10] = th.obedient_quaternion(xsn[6:10],xpr[6:10])
+                xsn[6:10] = oh.obedient_quaternion(xsn[6:10],xpr[6:10])
 
                 # Generate controller command
                 ucm,zcr,tsol = policy.control(tcr,xsn,ucm,obj,icr,zcr)
@@ -197,7 +198,7 @@ class Simulator:
 
             # Add model noise
             xcr = xcr + np.random.normal(loc=mu_md,scale=std_md)
-            xcr[6:10] = th.obedient_quaternion(xcr[6:10],xpr[6:10])
+            xcr[6:10] = oh.obedient_quaternion(xcr[6:10],xpr[6:10])
 
             # Update previous state
             xpr = xcr

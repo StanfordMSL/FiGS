@@ -6,13 +6,12 @@ import scipy.sparse as sps
 import scipy.linalg as spl
 import math
 import figs.tsplines.min_snap as ms
-import figs.utilities.trajectory_helper as th
+import figs.utilities.polynomial_helper as ph
 import figs.dynamics.quadcopter_model as qm
 from typing import Literal
 import qpsolvers
-from numpy.polynomial.legendre import Legendre
-
 from pathlib import Path
+from numpy.polynomial.legendre import Legendre
 from figs.control.base_controller import BaseController
 
 class VehicleRateFQP(BaseController):
@@ -45,9 +44,7 @@ class VehicleRateFQP(BaseController):
 
         # Controller Parameters
         hz,Kdr = policy["hz"],policy["Kdr"]
-
-        # Get base matrices
-        Vb = self.get_base_projection(Nco)
+        Nfo = len(Kdr)
 
         # Extract Flat Output Parameters
         Ts,FOs, = [],[]
@@ -57,30 +54,59 @@ class VehicleRateFQP(BaseController):
         Nsm = len(Ts)-1
 
         # Solve Min Snap for each Flat Output
-        P,q,A,b = [],[],[],[]
-        for i in range(len(Kdr)):
+        Ps,qs,As,bs = [],[],[],[]
+        for i in range(Nfo):
+            # Unpack some stuff
+            kdr = Kdr[i]
             fos = [FO[i] for FO in FOs]
 
-            # Compute Cost Matrices
-            Pb = self.get_base_integral_cost(Kdr[i],Nco)
-            Pi,qi = self.Pq_gen(Ts,Pb,Nco)
-            P.append(Pi)
-            q.append(qi)
+            # Compute cost terms
+            Pf,qf = self.Pq_gen(Ts,kdr,Nco)    
+            Ps.append(Pf),qs.append(qf)
 
-            # Compute Constraint Matrices
-            Ai,bi = self.Ab_gen(fos,Nco)
-            A.append(Ai)
-            b.append(bi)
+            # Compute constraints terms
+            Af,bf = self.Ab_gen(Ts,fos,Nco)
+            As.append(Af),bs.append(bf)
 
-        P = sps.block_diag(P)
-        q = np.vstack(q)
-        A = sps.block_diag(A)
-        b = np.vstack(b)
+        P = sps.block_diag(Ps)
+        q = np.vstack(qs)
+        A = sps.block_diag(As)
+        b = np.vstack(bs)
 
         c = qpsolvers.solve_qp(P,q,G=None,h=None,A=A,b=b,
                                     solver="osqp")       # Solve QP
-        cost = 0.5*c.T@P@c + q.T@c
-        print(f"Cost: {cost}")
+        
+        # Construct Mapping matrix
+        Ms = []
+        for i in range(Nfo):
+            for j in range(Nsm):
+                Mj = ph.get_control_points_map(Ts[j],Ts[j+1],Nco,0)
+                Ms.append(Mj)
+        M = sps.block_diag(Ms)
+
+        # Test out the mapping
+        X = M@c
+        X = X.reshape((4,Nsm,-1))
+
+        for i in range(5):
+            print(np.around(X[:,i,:],2))
+            print("="*40)
+        # cost = 0.5*c.T@P@c + q.T@c
+        # print(f"Cost: {cost}")
+
+        # t_eval = np.linspace(4.0,6.0,10)
+        # tau_eval = 2*(t_eval-4.0)/(6.0-4.0)-1
+        # rx = Legendre(coeffs[0,2,:])
+        # ry = Legendre(coeffs[1,2,:])
+        # rz = Legendre(coeffs[2,2,:])
+        # psi = Legendre(coeffs[3,2,:])
+        
+        # X = np.zeros((4,10))
+        # X[0,:] = rx(tau_eval)
+        # X[1,:] = ry(tau_eval)
+        # X[2,:] = rz(tau_eval)
+        # X[3,:] = psi(tau_eval)
+        # print(np.around(X,2))  
         # V = spl.block_diag(*[Vb]*4*(len(Ts)-1))
         # CPs = (V@c).reshape((Nfo,Nsm,-1))
         # print(np.around(CPs[:,0,:],2))
@@ -90,94 +116,111 @@ class VehicleRateFQP(BaseController):
 
         # print(CPs)
         # print("="*40)
-    def get_base_integral_cost(self,p:int,n:int) -> np.ndarray:
+    
+    def Pq_gen(self,Ts:list[float], kdr:int, Nco:int,
+               use_sparse:bool=True) -> tuple[np.ndarray,np.ndarray]:
         """
-        Generate the base integral cost (integral of the square of the p-th
-        derivative).
+        Generate the P and q matrices for the quadratic program.
 
         Args:
-            p:     Order of the derivative.
-            Ncp:   Number of control points.
+            Ts:         List of time points.
+            kdr:        Order of the derivative.
+            Nco:        Number of coeffeciants.
+            use_sparse: Use sparse matrix format.
 
         Returns:
-            Q:     Base integral cost matrix.
+            P:     Quadratic term.
+            q:     Linear term.
         """
 
-        Q = np.zeros((n,n))
-        for i in range(p,n):
-            for j in range(p,n):
-                fi = math.factorial(i)/math.factorial(i-p)
-                fj = math.factorial(j)/math.factorial(j-p)
-                den = 1+i+j-(2*p)
+        Nsm = len(Ts)-1
+        P = np.zeros((Nsm*Nco,Nsm*Nco))
+        q = np.zeros((Nsm*Nco,1))
 
-                Q[i,j] = fi*fj/den  # Integral of the square of the p-th derivative
+        for j in range(Nsm):
+            idx0,idxf = j*Nco,(j+1)*Nco  
+            Tj = Ts[j+1]-Ts[j]
+            Pj = ph.get_legendre_integral(Tj,kdr,Nco)
 
-        return Q
+            P[idx0:idxf,idx0:idxf] = Pj
 
-    def get_base_projection(self,n:int) -> np.ndarray:
+        # Convert the matrix to sparse
+        if use_sparse:
+            P = sps.csc_matrix(P)
+
+        return P,q
+    
+    def Ab_gen(self,Ts:list[float],fos:list[list[float,None]],Nco:int,
+               use_sparse:bool=True) -> tuple[np.ndarray,np.ndarray]:
         """
-        Generate the base projection matrix that maps coefficients to
-        control points.
-
+        Generate the A and b matrices for the quadratic program.
         Args:
-            n:     Number of control points.
+            Ts:         List of time points.
+            fos:        List of flat outputs.
+            Nsm:        Number of segments.
+            Nco:        Number of control points.
+            use_sparse: Use sparse matrix format.
 
         Returns:
-            V:     Base projection matrix (coefficients to control points).
+            A:     Constraint matrix.
+            b:     Constraint vector.
         """
 
-        P = np.zeros((n,n))
-        for i in range(0,n):
-            for j in range(0,n):
-                P[i,j] = (i/(n-1))**j
+        # Unpack some stuff
+        Nsm = len(fos)-1
+        Nct = self.get_Nct(fos)
 
-        return P
+        # Fill in the constraint matrix
+        A,b,kct = np.zeros((Nct,(Nco*Nsm))),np.zeros((Nct,1)),0
+        for ksm in range(Nsm):
+            # Unpack some stuff
+            Tk = Ts[ksm+1]-Ts[ksm]
+            fok,fon = fos[ksm],fos[ksm+1]
+            Npad = 0 if ksm == Nsm-1 else 1
 
-    def compute_equality(self, x:float, kdr:int, Nco:int, mode:Literal["initial","final"]):
-        """
-        Generate the equality constraint matrix.
+            # Compute beginning constraints
+            Asm,bsm = [],[]
+            for kdr,val in enumerate(fok):
+                if val is not None:
+                    A0 = ph.get_legendre_vector(-1.0,Tk,kdr,Nco)
+                    A1 = np.zeros((1,Nco*Npad))
 
-        Args:
-            x:      Value of the derivative.
-            kdr:    Order of the derivative.
-            Nco:    Number of control points.
-            mode:   Mode of the equality constraint ("initial" or "final").
+                    Ai,bi = np.hstack((A0,A1)),np.array([val])
+                else:
+                    Ai,bi = np.zeros((0,Nco*(Npad+1))),np.zeros((0,1))
 
-        Returns:
-            Aeq:   Continuity constraint matrix.
-            beq:   Continuity constraint vector.
-        """
+                Asm.append(Ai),bsm.append(bi)
+            
+            # Compute end constraints
+            for kdr,val in enumerate(fon):
+                if val is not None:
+                    A0 = ph.get_legendre_vector(1.0,Tk,kdr,Nco)
+                    A1 = np.zeros((1,Nco*Npad))
 
-        Aeq,beq = np.zeros((1,Nco)), np.array(-x).reshape((1,1))
-        if mode == "initial":
-            Aeq[0,kdr] = -math.factorial(kdr)
-        elif mode == "final":
-            for i in range(kdr,Nco):
-                Aeq[0,i] = math.factorial(i)/math.factorial(i-kdr)
-        else:
-            raise ValueError("Invalid mode. Use 'initial' or 'final'.")
-        
-        return Aeq,beq
-        
-    def compute_continuity(self, kdr:int, Nco:int):
-        """
-        Generate the continuity constraint matrix.
+                    Ai,bi = np.hstack((A0,A1)),np.array([val])
+                else:
+                    Tn = Ts[ksm+2]-Ts[ksm+1]
+                    A0 = ph.get_legendre_vector(1.0,Tk,kdr,Nco)
+                    A1 = ph.get_legendre_vector(-1.0,Tn,kdr,Nco)
 
-        Args:
-            kdr:    Order of the derivative.
-            Nco:    Number of control points.
+                    Ai,bi = np.hstack((A0,-A1)),np.array([0.0])
 
-        Returns:
-            Aeq:    Continuity constraint matrix.
-            beq:    Continuity constraint vector.
-        """
+                Asm.append(Ai),bsm.append(bi)
 
-        Aeq0 = self.compute_equality(0, kdr, Nco, mode="final")[0]
-        Aeq1 = self.compute_equality(0, kdr, Nco, mode="initial")[0]
-        Aeq = np.hstack((Aeq0, Aeq1))
-        beq = np.zeros((1,1))
+            # Pack the constraints
+            Asm,bsm = np.vstack(Asm),np.vstack(bsm)
+            r0,r1 = kct,kct+Asm.shape[0]
+            c0,c1 = ksm*Nco,(ksm+1+Npad)*Nco
+            A[r0:r1,c0:c1],b[r0:r1,:] = Asm,bsm
 
-        return Aeq,beq
+            # Update the constraint index
+            kct = r1
+
+        # Convert the matrix to sparse
+        if use_sparse:
+            A = sps.csc_matrix(A)
+
+        return A,b
 
     def get_Nct(self, fos:list[list[float,None]]) -> int:
         """
@@ -198,88 +241,9 @@ class VehicleRateFQP(BaseController):
 
         return Nct
     
-    def Pq_gen(self,Ts:list[float],Pb,Nco:int) -> tuple[np.ndarray,np.ndarray]:
-        """
-        Generate the P and q matrices for the quadratic program.
-
-        Args:
-            Ts:    List of time points.
-            Nco:   Number of control points.
-            Pb:    Base integral cost matrix.
-
-        Returns:
-            P:     Quadratic term.
-            q:     Linear term.
-        """
-        Nsm = len(Ts)-1
-        P = np.zeros((Nsm*Nco,Nsm*Nco))
-        q = np.zeros((Nsm*Nco,1))
-
-        for j in range(Nsm):
-            idx0,idxf = j*Nco,(j+1)*Nco
-            h = (Ts[j+1]-Ts[j])**2
-            P[idx0:idxf,idx0:idxf] = h*Pb
-
-        # Convert the matrix to sparse
-        P = sps.csc_matrix(P)
-
-        return P,q
-    
-    def Ab_gen(self,fos:list[list[float,None]],Nco) -> tuple[np.ndarray,np.ndarray]:
-        """
-        Generate the A and b matrices for the quadratic program.
-        Args:
-            fos:   List of flat outputs.
-            Nsm:   Number of segments.
-            Nco:   Number of control points.
-
-        Returns:
-            A:     Constraint matrix.
-            b:     Constraint vector.
-        """
-        Nsm = len(fos)-1
-        Nct = self.get_Nct(fos)
-
-        A = np.zeros((Nct,(Nsm*Nco)))
-        b = np.zeros((Nct,1))
-        rct = 0
-        for j in range(Nsm+1):
-            for k,fo in enumerate(fos[j]):
-                if fo is None:
-                    # Continuity Constraint
-                    Aeq,beq = self.compute_continuity(k,Nco)
-                    c0,cf = (j-1)*Nco,(j+1)*Nco
-                    r0,rf = rct,rct+1
-                else:
-                    # Equality Constraint
-                    if j == 0:
-                        Aeq,beq = self.compute_equality(fo,k,Nco,mode="initial")
-                        c0,cf = j*Nco,(j+1)*Nco
-                        r0,rf = rct,rct+1
-                    elif j == Nsm:
-                        Aeq,beq = self.compute_equality(fo,k,Nco,mode="final")
-                        c0,cf = (j-1)*Nco,(j)*Nco
-                        r0,rf = rct,rct+1
-                    else:
-                        Aeq0,beq0 = self.compute_equality(fo,k,Nco,mode="final")
-                        Aeq1,beq1 = self.compute_equality(fo,k,Nco,mode="initial")
-                        Aeq = spl.block_diag(Aeq0,Aeq1)
-                        beq = np.vstack((beq0,beq1))
-                        c0,cf = (j-1)*Nco,(j+1)*Nco
-                        r0,rf = rct,rct+2
-
-                # Fill in the constraint matrix
-                A[r0:rf,c0:cf] = Aeq
-                b[r0:rf] = beq
-                rct = rf
-
-        # Convert the matrix to sparse
-        A = sps.csc_matrix(A)
-
-        return A,b
-    
     def control(self, tcr: float, xcr: np.ndarray):
         return 'ha'
+    
 def solve(WPs:dict[str,int|tuple[np.float64,np.ndarray]],hz:int=20,
           Natt=5) -> dict[str,tuple[np.ndarray,np.ndarray]]:
     """
@@ -299,7 +263,8 @@ def solve(WPs:dict[str,int|tuple[np.float64,np.ndarray]],hz:int=20,
     Tp = [item['t'] for item in keyframes.values()]
     FOp = [np.array(item['fo'],dtype=float) for item in keyframes.values()]
     Nco = WPs["Nco"]
-
+    
+    
 #     # Generate QP Terms
 #     P,q = Pq_gen(Tp,Nco)                                           # Min Snap Cost
 #     A,b = Ab_gen(Tp,FOp,Nco)                                       # Keyframe Constraints

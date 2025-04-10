@@ -4,7 +4,7 @@ import os
 import numpy as np
 import scipy.linalg
 import figs.tsplines.min_snap as ms
-import figs.utilities.trajectory_helper as th
+import figs.utilities.transform_helper as th
 import figs.dynamics.quadcopter_model as qm
 
 from pathlib import Path

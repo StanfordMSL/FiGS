@@ -1,12 +1,12 @@
 """
-Helper functions for trajectory data.
+Helper functions for transforms.
 """
 
 import numpy as np
-import math
 
 from scipy.spatial.transform import Rotation
 from figs.dynamics.external_forces import ExternalForces
+from figs.utilities.polynomial_helper import get_M, get_nt
 
 def fo_to_xu(fo:np.ndarray,m:float,kt:float,
              fext:np.ndarray,
@@ -211,64 +211,6 @@ def CP_to_fo(tk:float,tf:float,CP:np.ndarray,
 
     return fo
 
-def get_M(Ncp:int) -> np.ndarray:
-    """
-    Generates the M matrix for polynomial interpolation.
-
-    Args:
-        - Ncp:    Number of control points.
-
-    Returns:
-        - M:      Polynomial interpolation matrix.
-    """
-
-    M = np.zeros((Ncp,Ncp))
-    for i in range(Ncp):
-        ci = (1/(Ncp-1))*i
-        for j in range(Ncp):
-            M[i,j] = ci**j
-    M = np.linalg.inv(M).T
-
-    return M
-
-def get_nt(rt:float,ndr:int,Ncp:int) -> np.ndarray:  
-    """
-    Generates the normalized time vector based on desired derivative order.
-
-    Args:
-        - rt:   Segment time ratio
-        - ndr:  Derivative order.
-        - Ncp:  Number of control points.
-
-    Returns:
-        - nt:   Normalized time vector.
-    """
-
-    nt = np.zeros(Ncp)
-    for i in range(ndr,Ncp):
-        c = math.factorial(i)/math.factorial(i-ndr)
-        nt[i] = c*rt**(i-ndr)
-    
-    return nt
-
-def obedient_quaternion(qcr:np.ndarray,qrf:np.ndarray) -> np.ndarray:
-    """
-    Ensure that the quaternion is well-behaved (unit norm and closest to reference).
-    
-    Args:
-        - qcr:    Current quaternion.
-        - qrf:    Previous quaternion.
-
-    Returns:
-        - qcr:     Closest quaternion to reference.
-    """
-    qcr = qcr/np.linalg.norm(qcr)
-
-    if np.dot(qcr,qrf) < 0:
-        qcr = -qcr
-
-    return qcr
-
 def xv_to_T(xcr:np.ndarray) -> np.ndarray:
     """
     Converts a state vector to a transfrom matrix.
@@ -284,137 +226,3 @@ def xv_to_T(xcr:np.ndarray) -> np.ndarray:
     Tcr[0:3,3] = xcr[0:3]
 
     return Tcr
-
-# def ts_to_xu(tcr:float,Tp:float,CP:np.ndarray,m:float,kt:float,
-#              Fext:ExternalForces|None,
-#              n_mtr:int=4) -> np.ndarray:
-#     """
-#     Converts a trajectory spline (defined by tf,CP) to a state vector and control input.
-#     Returns just x if quad is None.
-
-#     Args:
-#         - tcr:      Current segment time.
-#         - Tp:       Trajectory segment final time.
-#         - CP:       Control points.
-#         - m:        Mass of the quadcopter.
-#         - kt:       Total motor thrust coefficient.
-#         - Fext:     External forces object.
-#         - n_mtr:    Number of motors
-
-#     Returns:
-#         xu:    State vector and control input.
-#     """
-#     # Convert to Flat Output
-#     fo = ts_to_fo(tcr,Tp,CP)
-
-#     # Compute External Forces (if any)
-#     if Fext is None:
-#         fext = np.zeros(3)
-#     else:
-#         pv = fo[0:3,0:2].flatten()
-#         fext = Fext.get_forces(pv)
-
-#     return fo_to_xu(fo,m,kt,fext,n_mtr)
-
-# def TS_to_xu(tcr:float,Tps:np.ndarray,CPs:np.ndarray,m:float,kt:float,
-#              Fext:ExternalForces|None,
-#              n_mtr:int=4) -> np.ndarray:
-#     """
-#     Extracts the state and input from a sequence of trajectory splines (defined by
-#     Tps,CPs). Returns just x if quad is None.
-
-#     Args:
-#         - tcr:      Current segment time.
-#         - Tps:      Trajectory segment times.
-#         - CPs:      Trajectory control points.
-#         - m:        Mass of the quadcopter.
-#         - kt:       Total motor thrust coefficient.
-#         - Fext:     External forces object.
-#         - n_mtr:    Number of motors
-
-#     Returns:
-#         xu:    State vector and control input.
-#     """
-#     idx = np.max(np.where(Tps < tcr)[0])
-    
-#     if idx == len(Tps)-1:
-#         tcr = Tps[-1]
-#         t0,tf = Tps[-2],Tps[-1]
-#         CPk = CPs[-1,:,:]
-#     else:
-#         t0,tf = Tps[idx],Tps[idx+1]
-#         CPk = CPs[idx,:,:]
-
-#     xu = ts_to_xu(tcr-t0,tf-t0,CPk,m,kt,Fext,n_mtr)
-
-#     return xu
-
-# def TS_to_tXU(hz:int,Tps:np.ndarray,CPs:np.ndarray,m:float,kt:float,
-#               Fext:ExternalForces|None,
-#               n_mtr:int=4) -> np.ndarray:
-#     """
-#     Converts a sequence of trajectory splines (defined by Tps,CPs) to a trajectory
-#     rollout. Returns just tX if quad is None.
-
-#     Args:
-#         - hz:       Control loop frequency.
-#         - Tps:      Trajectory segment times.
-#         - CPs:      Trajectory control points.
-#         - m:        Mass of the quadcopter.
-#         - kt:       Motor thrust coefficient.
-#         - Fext:     External forces object.
-#         - n_mtr:    Number of motors
-
-#     Returns:
-#         - tXU:  State vector and control input rollout.
-#     """
-#     Nt = int((Tps[-1]-Tps[0])*hz+1)
-
-#     idx = 0
-#     for k in range(Nt):
-#         tk = Tps[0]+k/hz
-
-#         if tk > Tps[idx+1] and idx < len(Tps)-2:
-#             idx += 1
-
-#         t0,tf = Tps[idx],Tps[idx+1]
-#         CPk = CPs[idx,:,:]
-#         xu = ts_to_xu(tk-t0,tf-t0,CPk,m,kt,Fext,n_mtr)
-
-#         if k == 0:
-#             ntxu = len(xu)+1
-#             tXU = np.zeros((ntxu,Nt))
-#         else:
-#             xu[6:10] = obedient_quaternion(xu[6:10],tXU[7:11,k-1])
-                
-#         tXU[0,k] = tk
-#         tXU[1:,k] = xu
-
-#     return tXU
-
-
-
-
-
-
-
-# def RO_to_tXU(RO:tuple[np.ndarray,np.ndarray,np.ndarray]) -> np.ndarray:
-    """
-    Converts a tuple of rollouts to a state vector and control input rollout.
-
-    Args:
-        - RO:    Rollout tuple (Tro,Xro,Uro).
-
-    Returns:
-        - tXU:   State vector and control input rollout.
-    """
-    # Unpack the tuple
-    Tro,Xro,Uro = RO
-
-    # Stack the arrays
-    if Uro.shape[1] != Xro.shape[1]:
-        Uro = np.hstack((Uro,Uro[:,-1].reshape(-1,1)))
-
-    tXU = np.vstack((Tro,Xro,Uro))
-
-    return tXU
