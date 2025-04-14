@@ -80,6 +80,77 @@ def fo_to_xu(fo:np.ndarray,m:float,kt:float,
 
     return xu
 
+def xu_to_fo(xu:np.ndarray,m:float,kt:float,
+            fext:np.ndarray,
+            n_mtr:int=4,Nfo:int=4,Ndr:int=3,
+            use_list:bool=False) -> np.ndarray:
+    """
+    Converts a state vector to approximation of flat output vector.
+
+    Args:
+        xu:         State vector
+        m:          Mass of the quadcopter.
+        kt:         Total motor thrust coefficient.
+        fext:       External forces vector.
+        n_mtr:      Number of motors
+        Nfo:        Number of flat outputs.
+        Ndr:        Number of derivatives.
+        use_list:   Use list instead of numpy array.
+
+    Returns:
+        fo:         Flat outputs.
+    """
+
+    # Unpack state vector
+    pk = xu[0:3]
+    vk = xu[3:6]
+    qk = xu[6:10]
+    uk = xu[10:14]
+
+    # Define Gravity
+    gt = np.array([0.00,0.00,9.81])
+
+    # Initialize output
+    fo = np.zeros((Nfo,Ndr))
+
+    # Compute position terms
+    fo[0:3,0] = pk
+    fo[0:3,1] = vk
+
+    # Compute acceleration terms
+    Rk = Rotation.from_quat(qk).as_matrix()
+    xbt,ybt,zbt = Rk[:,0],Rk[:,1],Rk[:,2]
+    c = (uk[0]*(n_mtr*kt))/m
+
+    fo[0:3,2] = c*zbt+gt+(fext/m)
+
+    # Compute yaw term
+    psi = np.arctan2(Rk[1,0], Rk[0,0])
+
+    fo[3,0]  = psi
+
+    # Compute yaw rate term
+    xct = np.array([np.cos(psi), np.sin(psi), 0])     # Intermediate frame x vector
+    yct = np.array([-np.sin(psi), np.cos(psi), 0])    # Intermediate frame y vector
+    
+    B1 = c
+    B3 = -yct.T@zbt
+    C3 = np.linalg.norm(np.cross(yct,zbt))
+    D1 = uk[2]*(B1*C3)/C3
+    D3 = (uk[3]*(B1*C3)+(B3*D1))/B1
+
+    psid = D3/(xct.T@xbt)
+
+    fo[3,1] = psid
+
+    # Convert to list if required
+    if use_list:
+        fo[3,2] = None
+        fo = fo.tolist()
+        fo = [[x for x in sublist if ~np.isnan(x)] for sublist in fo]
+
+    return fo
+
 def TpCP_to_TsFO(Tp:np.ndarray,CP:np.ndarray,
                  hz:int=20,Nfo:int=4,Ndr:int=4) -> tuple[np.ndarray,np.ndarray]:
     """
@@ -102,7 +173,7 @@ def TpCP_to_TsFO(Tp:np.ndarray,CP:np.ndarray,
     Nt = int((Tp[-1]-Tp[0])*hz+1)
     Ts = np.linspace(Tp[0],Tp[-1],Nt)
     FO = np.zeros((Nt,Nfo,Ndr))
-
+    
     # Compute flat outputs
     idx = 0
     for k in range(Nt):
@@ -114,7 +185,8 @@ def TpCP_to_TsFO(Tp:np.ndarray,CP:np.ndarray,
         t0,tf = Tp[idx],Tp[idx+1]
         CPk = CP[idx,:,:]
         
-        FO[k,:,:] = CP_to_fo(tk-t0,tf-t0,CPk,Nfo,Ndr)
+        fo = CP_to_fo(tk-t0,tf-t0,CPk)
+        FO[k,:,:] = fo[:,:Ndr]
 
     return Ts,FO
 
@@ -185,8 +257,7 @@ def kf_to_TsFO(kf:dict[str,dict],Nfo:int=4,Ndr:int=4) -> tuple[np.ndarray,np.nda
 
     return Ts,FO
 
-def CP_to_fo(tk:float,tf:float,CP:np.ndarray,
-             Nfo:int,Ndr:int) -> np.ndarray:
+def CP_to_fo(tk:float,tf:float,CP:np.ndarray) -> np.ndarray:
     """
     Converts a trajectory spline (defined by Tp,CP) to a flat output.
 
@@ -194,19 +265,17 @@ def CP_to_fo(tk:float,tf:float,CP:np.ndarray,
         - tk:   Segment current time.
         - tf:   Segment final time.
         - CP:   Control points.
-        - Nfo:  Number of flat outputs.
-        - Ndr:  Number of derivatives.
 
     Returns:
         - fo:   Flat output vector.
     """
 
-    Ncp = CP.shape[1]
-    M = get_M(Ncp)
+    Nfo,Nco = CP.shape
+    M = get_M(Nco)
 
-    fo = np.zeros((Nfo,Ndr))
-    for i in range(Ndr):
-        nt = get_nt(tk/tf,i,Ncp)
+    fo = np.zeros((Nfo,Nco))
+    for i in range(Nco):
+        nt = get_nt(tk/tf,i,Nco)
         fo[:,i] = (CP@M@nt) / (tf**i)
 
     return fo

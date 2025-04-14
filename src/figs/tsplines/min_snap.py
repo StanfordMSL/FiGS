@@ -11,9 +11,9 @@ np.set_printoptions(threshold=sys.maxsize)
 np.set_printoptions(linewidth=np.inf)
 
 # Fixed parameters for minimum snap quadcopter trajectory planning problem
-Nfo = 4                                                         # Number of Flat Outputs
-kdr = np.array([4,4,4,2])                                       # Target derivative to minimize
+Kdr = np.array([4,4,4,2])                                       # Target derivative to minimize
 mu  = np.array([1.0,1.0,1.0,1.0])                               # Scaling for each parameter
+Nfo = len(Kdr)                                                  # Number of Flat Outputs
 
 def solve(WPs:dict[str,int|tuple[np.float64,np.ndarray]],hz:int=20,
           Natt=5) -> dict[str,tuple[np.ndarray,np.ndarray]]:
@@ -21,7 +21,8 @@ def solve(WPs:dict[str,int|tuple[np.float64,np.ndarray]],hz:int=20,
     Solve the minimum snap trajectory planning problem.
 
     Args:
-        config: Dictionary containing the course configuration.
+        WPs:    Dictionary containing the course configuration.
+        hz:     Sampling frequency.
         Natt:   Number of attempts to solve the QP problem.
 
     Returns:
@@ -36,7 +37,7 @@ def solve(WPs:dict[str,int|tuple[np.float64,np.ndarray]],hz:int=20,
     Nco = WPs["Nco"]
 
     # Generate QP Terms
-    P,q = Pq_gen(Tp,Nco)                                           # Min Snap Cost
+    P = P_gen(Tp,Nco)                                           # Min Snap Cost
     A,b = Ab_gen(Tp,FOp,Nco)                                       # Keyframe Constraints
 
     # Convert to Sparse
@@ -46,7 +47,7 @@ def solve(WPs:dict[str,int|tuple[np.float64,np.ndarray]],hz:int=20,
     # Solve QP to get coefficient solution (spline variables)
     for attempt in range(Natt):
         try:
-            sigma = qpsolvers.solve_qp(P,q,G=None,h=None,A=A,b=b,
+            sigma = qpsolvers.solve_qp(P,q=None,G=None,h=None,A=A,b=b,
                                     solver="osqp")       # Solve QP
             SM = sigma.reshape((-1,Nfo,Nco))                                # Reshape to match keyframes
 
@@ -60,7 +61,7 @@ def solve(WPs:dict[str,int|tuple[np.float64,np.ndarray]],hz:int=20,
             
             # Package Output
             output = {
-                "QP": {"P":P,"q":q,"x":sigma,"A":A,"b":b},
+                "QP": {"P":P,"A":A,"b":b,"x":sigma},
                 "CP": (Tps,CPs),
                 "FO": (Tss,FOs),
             }
@@ -72,7 +73,7 @@ def solve(WPs:dict[str,int|tuple[np.float64,np.ndarray]],hz:int=20,
             if attempt == Natt - 1:
                 raise Exception("Minimum Snap Trajectory Solve Failed. Please check the input data.")
     
-def Pq_gen(Tp:list[float],Nco:int) -> tuple[np.ndarray,np.ndarray]:
+def P_gen(Tp:list[float],Nco:int) -> tuple[np.ndarray,np.ndarray]:
     # Unpack some stuff
     Nsm = len(Tp)-1            # Number of segments
 
@@ -82,13 +83,12 @@ def Pq_gen(Tp:list[float],Nco:int) -> tuple[np.ndarray,np.ndarray]:
         tf = Tp[i+1]
 
         for j in range(0,Nfo):
-            P = mu[j]*Ps_gen(kdr[j],t0,tf,Nco)
+            P = mu[j]*Ps_gen(Kdr[j],t0,tf,Nco)
             Plist.append(P)
 
     P = spl.block_diag(*Plist)
-    q = np.zeros(Nsm*Nfo*Nco)
 
-    return P,q
+    return P
 
 def Ps_gen(kdr:float,t0:float,tf:float,Nco:int) -> np.ndarray:
     Ps = np.zeros((Nco,Nco))

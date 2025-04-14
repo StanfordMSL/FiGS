@@ -110,7 +110,7 @@ def get_legendre_vector(tau:float,dt:float,kdr:int,Nco:int) -> np.ndarray:
 
     return A
 
-def get_control_points_map(t0:float, tf:float, Nco:int, kdr:int) -> np.ndarray:
+def get_control_points_map(t0:float, tf:float, Nco:int) -> np.ndarray:
     """
     Generate the projection matrix that maps Legendre coefficients to
     control points.
@@ -119,7 +119,6 @@ def get_control_points_map(t0:float, tf:float, Nco:int, kdr:int) -> np.ndarray:
         t0:     Start time.
         tf:     End time.
         Nco:    Number of control points.
-        kdr:    Order of the derivative.
 
     Returns:
         M:     Projection matrix (coefficients to control points).
