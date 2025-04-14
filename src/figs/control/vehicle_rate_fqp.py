@@ -1,14 +1,13 @@
 
 import numpy as np
 import scipy.sparse as sps
-import figs.tsplines.leg_min_snap as lms
 import figs.utilities.polynomial_helper as ph
 import figs.utilities.transform_helper as th
 import qpsolvers
 from pathlib import Path
 from figs.control.base_controller import BaseController
 from figs.dynamics.external_forces import ExternalForces
-
+from figs.tsplines.min_time_snap import MinTimeSnap
 class VehicleRateFQP(BaseController):
     def __init__(self,
                  policy:dict,course:dict,frame:dict=None,
@@ -34,6 +33,7 @@ class VehicleRateFQP(BaseController):
         # Controller Parameters
         hz = policy["hz"]
         Nfo,Nco = policy["Nfo"],policy["Nco"]
+        kT,Kdr,mus = policy["kT"],policy["Kdr"],policy["mus"]
         Nsh,Kdr = policy["Nsh"],policy["Kdr"]
         Nhn = policy["horizon"]
 
@@ -49,31 +49,32 @@ class VehicleRateFQP(BaseController):
             m,kt = frame["mass"],frame["motor_thrust_coeff"]
 
         # Compute desired trajectory
-        output = lms.solve(WPs,hz=hz)
+        mts = MinTimeSnap(WPs,kT,Kdr,mus,Nco,hz)
+        output = mts.solve()
 
         Tsd,FOd = output["FO"]
-        tXUd = th.TsFO_to_tXU(Tsd,FOd,m,kt,Fex)
+        self.tXUd = th.TsFO_to_tXU(Tsd,FOd,m,kt,Fex)
 
-        # Compute controller P,V matrices
-        ti,tf = 0.0,Nhn/hz
-        Ps,Vs = [],[]
-        for j in range(Nfo):
-            Ps.append(lms.P_gen([ti,tf],Kdr[j],Nco))
-            Vs.append(ph.get_control_points_map(ti,tf,Nco))
-        P = sps.block_diag(Ps, format='csc')    
-        V = sps.block_diag(Vs)
+        # # Compute controller P,V matrices
+        # ti,tf = 0.0,Nhn/hz
+        # Ps,Vs = [],[]
+        # for j in range(Nfo):
+        #     Ps.append(lms.P_gen([ti,tf],Kdr[j],Nco))
+        #     Vs.append(ph.get_control_points_map(ti,tf,Nco))
+        # P = sps.block_diag(Ps, format='csc')    
+        # V = sps.block_diag(Vs)
 
-        # Class variables
-        self.hz = hz
-        self.Nfo,self.Nco = Nfo,Nco
-        self.Nsh,self.Kdr = Nsh,Kdr
-        self.Nhn = Nhn
+        # # Class variables
+        # self.hz = hz
+        # self.Nfo,self.Nco = Nfo,Nco
+        # self.Nsh,self.Kdr = Nsh,Kdr
+        # self.Nhn = Nhn
 
-        self.m,self.kt = m,kt
-        self.Tsd,self.FOd = Tsd,FOd
-        self.tXUd,self.Fex = tXUd,Fex
+        # self.m,self.kt = m,kt
+        # self.Tsd,self.FOd = Tsd,FOd
+        # self.tXUd,self.Fex = tXUd,Fex
 
-        self.P,self.V = P,V
+        # self.P,self.V = P,V
 
     def control(self,
                 tpr:float, xpr:np.ndarray, upr:np.ndarray) -> np.ndarray:
