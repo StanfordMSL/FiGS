@@ -3,10 +3,10 @@ Helper functions for transforms.
 """
 
 import numpy as np
+import figs.utilities.polynomial_helper as ph
 
 from scipy.spatial.transform import Rotation
 from figs.dynamics.external_forces import ExternalForces
-from figs.utilities.polynomial_helper import get_M, get_nt
 
 def fo_to_xu(fo:np.ndarray,m:float,kt:float,
              fext:np.ndarray,
@@ -25,7 +25,7 @@ def fo_to_xu(fo:np.ndarray,m:float,kt:float,
     Returns:
         - xu:    State vector and control input.
     """
-    
+
     # Unpack flat output
     pt = fo[0:3,0]
     vt = fo[0:3,1]
@@ -169,24 +169,27 @@ def TpCP_to_TsFO(Tp:np.ndarray,CP:np.ndarray,
         - FO:  Flat outputs.
     """
 
-    # Initialize output variables
+    # Get some useful constants
+    _,Nfo,Nco = CP.shape
+    
+    # Initialize output variable
     Nt = int((Tp[-1]-Tp[0])*hz+1)
     Ts = np.linspace(Tp[0],Tp[-1],Nt)
     FO = np.zeros((Nt,Nfo,Ndr))
-    
+
+    # Generate A matrices
+    As = ph.generate_As(Ts,Nco,Ndr)
+
+    # Generate the CP to flat output mapping
+    M = ph.generate_M(Nco)
+
     # Compute flat outputs
-    idx = 0
-    for k in range(Nt):
-        tk = Tp[0]+k/hz
-
-        if tk > Tp[idx+1] and idx < len(Tp)-2:
-            idx += 1
-
-        t0,tf = Tp[idx],Tp[idx+1]
-        CPk = CP[idx,:,:]
-        
-        fo = CP_to_fo(tk-t0,tf-t0,CPk)
-        FO[k,:,:] = fo[:,:Ndr]
+    for i in range(Nt):
+        Ai = As[Ts[i]]
+        idx = ph.get_segment_index(Ts[i],Tp)
+        for j in range(Nfo):
+            CPj = CP[idx,j,:]
+            FO[i,j,:] = Ai@M@CPj
 
     return Ts,FO
 
@@ -233,13 +236,125 @@ def TsFO_to_tXU(Ts:np.ndarray,FO:np.ndarray,
 
     return tXU
 
-def kf_to_TsFO(kf:dict[str,dict],Nfo:int=4,Ndr:int=4) -> tuple[np.ndarray,np.ndarray]:
+def TpCP_to_tXU(Tp:np.ndarray,CP:np.ndarray,
+                hz:int=20,m:float=1.0,kt:float=1.0,
+                Fext:ExternalForces|None=None,
+                n_mtr:int=4,ndim:int=15) -> np.ndarray:
     """
-    Converts a waypoint trajectory (defined by WPs) to a sequence of trajectory
-    segment times and flat outputs.
+    Converts a trajectory spline (defined by Tp,CP) to a state vector and control
+    input rollout.
+
     Args:
-        - kf:  Waypoint trajectory.
-        - Nfo: Number of flat outputs.
+        - Tp:       Trajectory segment times.
+        - CP:       Control points.
+        - hz:       Control loop frequency.
+        - m:        Mass of the quadcopter.
+        - kt:       Total motor thrust coefficient.
+        - Fext:     External forces object.
+        - n_mtr:    Number of motors
+        - ndim:     Number of dimensions in the state vector.
+
+    Returns:
+        - tXU:      State vector and control input rollout.
+    """
+
+    Ts,FO = TpCP_to_TsFO(Tp,CP,hz)
+
+    tXU = TsFO_to_tXU(Ts,FO,m,kt,Fext,n_mtr,ndim)
+
+    return tXU
+
+def KF_to_TpFO(KF:dict,Ndr:int,impose:bool=False) -> tuple[np.ndarray,np.ndarray]:
+    """
+    Extract the time and flat output values from the trajectory. Automatically
+    pads unstated flat outputs with NaN values.
+
+    Args:
+        KF:     Dictionary containing the course configuration.
+        impose: Impose continuity on undefined flat outputs.
+
+    Returns:
+        Tp: Time points.
+        FO: Flat output frames.
+    """
+
+    # Some useful internal variables
+    Nkf = len(KF)
+    kf0 = next(iter(KF.values()))["fo"]
+    Nfo = len(kf0)
+
+    # Check if number of flat output derivatives is reasonable
+    for kf in KF.values():
+        for fo in kf["fo"]:
+            if len(fo) > Ndr:
+                raise ValueError("Flat output derivative exceeds proposed Ndr")
+    
+    # Condition undefined flat outputs
+    if impose:
+        limit_fill,stage_fill = 0.0,np.nan
+    else:
+        limit_fill,stage_fill = "no","no"
+    #TODO replace no with a float type.
+
+    # Initialize output variables
+    Tp = np.zeros(Nkf)
+    FO = np.full((Nkf,Nfo,Ndr),stage_fill)
+    FO[[0,-1],:,:] = limit_fill
+
+    # Extract time and flat output values
+    for i,kf in enumerate(KF.values()):
+        Tkf,FOkf = kf["t"],kf["fo"]
+        Tp[i] = Tkf
+
+        for j in range(Nfo):
+            fokf = FOkf[j]
+
+            for k,fo in enumerate(fokf):
+                if isinstance(fo,float):
+                    FO[i,j,k] = fo
+                elif fo == None:
+                    FO[i,j,k] = np.nan
+
+    return Tp,FO
+
+def TpPn_to_CP(Tp:np.ndarray,Pn:np.ndarray) -> np.ndarray:
+    """
+    Converts a polynomial matrix to control points.
+
+    Args:
+        Tp: Time points.
+        Pn: Polynomial matrix.
+
+    Returns:
+        CP: Control points.
+    """
+
+    # Get some useful constants
+    Nfo,Nsm,Nco = Pn.shape
+    
+    # Initialize output variable
+    CP = np.zeros((Nsm,Nfo,Nco))
+    for i in range(Nsm):
+        Ti = np.linspace(Tp[i],Tp[i+1],Nco)
+        As = ph.generate_As(Ti,Nco)
+
+        for j in range(Nco):
+            Aj = As[Ti[j]]
+            for k in range(Nfo):
+                CP[i,k,j] = Aj@Pn[k,i,:]
+    print('ha',np.around(CP,3))
+    return CP
+
+def TpPn_to_TsFO(Tp:np.ndarray,Pn:np.ndarray,
+                 hz:int=20,Ndr:int=4) -> tuple[np.ndarray,np.ndarray]:
+    """
+    Converts a polynomial matrix to a sequence of trajectory segment times and
+    flat outputs.
+
+    Args:
+        - Tp:  Trajectory segment times.
+        - Pn:  Polynomial matrix.
+        - hz:  Control loop frequency.
         - Ndr: Number of derivatives.
 
     Returns:
@@ -247,40 +362,61 @@ def kf_to_TsFO(kf:dict[str,dict],Nfo:int=4,Ndr:int=4) -> tuple[np.ndarray,np.nda
         - FO:  Flat outputs.
     """
 
+    # Get some useful constants
+    Nfo,_,Nco = Pn.shape
+    Nt = int((Tp[-1]-Tp[0])*hz+1)
+    
+    # Initialize output variable
+    Ts = np.linspace(Tp[0],Tp[-1],Nt)
+    FO = np.zeros((Nt,Nfo,Ndr))
 
-    Ts = np.array([kf["t"]])    
-    FO = np.zeros((1,Nfo,Ndr))
-    for i in range(Nfo):
-        fo = kf["fo"][i]
-        for j in range(len(fo)):
-            FO[0,i,j] = fo[j]
+    # Compute flat outputs
+    for i in range(Nt):
+        idx0 = ph.get_segment_index(Ts[i],Tp)
+        idx1 = idx0+1
+        t0,t1 = Tp[idx0],Tp[idx1]
 
+        Ai = ph.generate_As([Ts[i]],t0,t1,Nco,Ndr)[0]
+        for j in range(Nfo):
+            FO[i,j,:] = Ai@Pn[j,idx0,:]
+
+    idx = np.where(Ts < Tp[1])[0][-1]+1
+    print(Ts[  0],'\n',np.around(FO[  0,:,0:4],2))
+    print(Ts[idx],'\n',np.around(FO[idx,:,0:4],2))
+    print(Ts[ -1],'\n',np.around(FO[ -1,:,0:4],2))
     return Ts,FO
 
-def CP_to_fo(tk:float,tf:float,CP:np.ndarray) -> np.ndarray:
+def TpPn_to_tXU(Tp:np.ndarray,Pn:np.ndarray,
+                hz:int=20,m:float=1.0,kt:float=1.0,
+                Fext:ExternalForces|None=None,
+                n_mtr:int=4,ndim:int=15) -> np.ndarray:
     """
-    Converts a trajectory spline (defined by Tp,CP) to a flat output.
+    Converts a polynomial matrix to a state vector and control input rollout.
 
     Args:
-        - tk:   Segment current time.
-        - tf:   Segment final time.
-        - CP:   Control points.
+        - Tp:       Trajectory segment times.
+        - Pn:       Polynomial matrix.
+        - hz:       Control loop frequency.
+        - m:        Mass of the quadcopter.
+        - kt:       Total motor thrust coefficient.
+        - Fext:     External forces object.
+        - n_mtr:    Number of motors
+        - ndim:     Number of dimensions in the state vector.
 
     Returns:
-        - fo:   Flat output vector.
+        - tXU:      State vector and control input rollout.
     """
 
-    Nfo,Nco = CP.shape
-    M = get_M(Nco)
+    # Convert polynomial matrix to trajectory segment times and flat outputs
+    Ts,FO = TpPn_to_TsFO(Tp,Pn,hz)
 
-    fo = np.zeros((Nfo,Nco))
-    for i in range(Nco):
-        nt = get_nt(tk/tf,i,Nco)
-        fo[:,i] = (CP@M@nt) / (tf**i)
+    # Convert trajectory segment times and flat outputs to state vector and
+    # control input rollout
+    tXU = TsFO_to_tXU(Ts,FO,m,kt,Fext,n_mtr,ndim)
 
-    return fo
+    return tXU
 
-def xv_to_T(xcr:np.ndarray) -> np.ndarray:
+def x_to_T(xcr:np.ndarray) -> np.ndarray:
     """
     Converts a state vector to a transfrom matrix.
 

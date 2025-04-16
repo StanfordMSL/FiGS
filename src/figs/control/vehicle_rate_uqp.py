@@ -7,15 +7,18 @@ import qpsolvers
 from pathlib import Path
 from figs.control.base_controller import BaseController
 from figs.dynamics.external_forces import ExternalForces
+import figs.tsplines.min_snap as ms
 from figs.tsplines.min_time_snap import MinTimeSnap
-class VehicleRateFQP(BaseController):
+import time
+
+class VehicleRateUQP(BaseController):
     def __init__(self,
                  policy:dict,course:dict,frame:dict=None,
                  name:str="vroqp",
                  configs_path:Path=None) -> None:
         
         """
-        Constructor for the VehicleRateFQP class (Fielded Quadratic Program).
+        Constructor for the VehicleRateFQP class (Unconstrained Quadratic Program).
         
         Args:
             - policy:       Config Dict of the policy.
@@ -31,11 +34,8 @@ class VehicleRateFQP(BaseController):
         super().__init__(configs_path)
 
         # Controller Parameters
+        kT = policy["kT"]
         hz = policy["hz"]
-        Nfo,Nco = policy["Nfo"],policy["Nco"]
-        kT,Kdr,mus = policy["kT"],policy["Kdr"],policy["mus"]
-        Nsh,Kdr = policy["Nsh"],policy["Kdr"]
-        Nhn = policy["horizon"]
 
         # Course Parameters
         WPs = course["waypoints"]
@@ -49,11 +49,22 @@ class VehicleRateFQP(BaseController):
             m,kt = frame["mass"],frame["motor_thrust_coeff"]
 
         # Compute desired trajectory
-        mts = MinTimeSnap(WPs,kT,Kdr,mus,Nco,hz)
-        output = mts.solve()
+        mts = MinTimeSnap(WPs,kT,hz)
 
-        Tsd,FOd = output["FO"]
-        self.tXUd = th.TsFO_to_tXU(Tsd,FOd,m,kt,Fex)
+        tf = mts.Tp[-1]
+        Ts = np.linspace(0.0,tf,int(tf*hz)+1)
+        
+        Nn = 60
+        t0 = time.time()
+        for i in range(Nn):
+            Tp,Pn = mts.solve()
+        t1 = time.time()
+        dt = (t1-t0)/Nn
+        hz_out = 1/dt
+        print(f"VehicleRateUQP: {hz_out} Hz")
+
+
+        self.tXUd = th.TpPn_to_tXU(Tp,Pn,hz,m,kt,Fex)
 
         # # Compute controller P,V matrices
         # ti,tf = 0.0,Nhn/hz
