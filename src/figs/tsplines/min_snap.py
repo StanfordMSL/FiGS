@@ -5,180 +5,220 @@ import sys
 import math
 import qpsolvers
 import figs.utilities.transform_helper as th
+import figs.utilities.polynomial_helper as ph
 
 # Debugging
 np.set_printoptions(threshold=sys.maxsize)
 np.set_printoptions(linewidth=np.inf)
 
-# Fixed parameters for minimum snap quadcopter trajectory planning problem
-Kdr = np.array([4,4,4,2])                                       # Target derivative to minimize
-mu  = np.array([1.0,1.0,1.0,1.0])                               # Scaling for each parameter
-Nfo = len(Kdr)                                                  # Number of Flat Outputs
-
-def solve(WPs:dict[str,int|tuple[np.float64,np.ndarray]],hz:int=20,
-          Natt=5) -> dict[str,tuple[np.ndarray,np.ndarray]]:
+class MinSnap():
     """
-    Solve the minimum snap trajectory planning problem.
-
-    Args:
-        WPs:    Dictionary containing the course configuration.
-        hz:     Sampling frequency.
-        Natt:   Number of attempts to solve the QP problem.
-
-    Returns:
-        output: Dictionary containing the solution in its various forms.
-
+    Class for generating minimum snap trajectories.
     """
 
-    # Unpack data from dictionary
-    keyframes:dict = WPs["keyframes"]
-    Tp = [item['t'] for item in keyframes.values()]
-    FOp = [np.array(item['fo'],dtype=float) for item in keyframes.values()]
-    Nco = WPs["Nco"]
+    def __init__(self, WPs:dict[str,int|tuple[np.float64,np.ndarray]],hz:int=20):
+        """
+        Initialize the class with waypoints and sampling frequency.
 
-    # Generate QP Terms
-    P = P_gen(Tp,Nco)                                           # Min Snap Cost
-    A,b = Ab_gen(Tp,FOp,Nco)                                       # Keyframe Constraints
+        Args:
+            WPs:    Dictionary containing the course configuration.
+            hz:     Sampling frequency.
 
-    # Convert to Sparse
-    P = sps.csc_matrix(P)
-    A = sps.csc_matrix(A)
-
-    # Solve QP to get coefficient solution (spline variables)
-    for attempt in range(Natt):
-        try:
-            sigma = qpsolvers.solve_qp(P,q=None,G=None,h=None,A=A,b=b,
-                                    solver="osqp")       # Solve QP
-            SM = sigma.reshape((-1,Nfo,Nco))                                # Reshape to match keyframes
-
-            Nsm = SM.shape[0]
-            TT = np.zeros((Nsm,Nco))
-            for i in range(0,Nsm):
-                TT[i,:] = np.linspace(Tp[i],Tp[i+1],Nco)
-            
-            Tps,CPs = np.array(Tp),SM2CP(SM,TT,Nco)
-            Tss,FOs = th.TpCP_to_TsFO(Tps,CPs,hz)          # Convert to Flat Output
-            
-            # Package Output
-            output = {
-                "QP": {"P":P,"A":A,"b":b,"x":sigma},
-                "CP": (Tps,CPs),
-                "FO": (Tss,FOs),
-            }
-
-            return output
+        """
         
-        except:
-            print(f"Minimum Snap Trajectory Solve Failed (Attempt {attempt + 1}) failed. Retrying...")
-            if attempt == Natt - 1:
-                raise Exception("Minimum Snap Trajectory Solve Failed. Please check the input data.")
+        # Some class constants
+        Kdr = np.array([4,4,4,4])
+        Ndr = 5
+        
+        Nfo,Nco = len(Kdr),WPs["Nco"]
+
+        # Class constant variables
+        self.Kdr,self.Ndr = Kdr,Ndr
+        self.Nfo,self.Nco = Nfo,Nco
+        self.hz = hz
+
+        # Extract Flat Output Variables (Tp desired and FO desired)
+        Tkf,FOkf = th.KF_to_TpFO(WPs["keyframes"],None)
+        dT = np.diff(Tkf)
+
+        # Get initial solution
+        self.dTd,self.Pnd = self.solve(FOkf,dT)
+
+    def solve(self,FOkf:np.ndarray,dT:np.ndarray) -> tuple[np.ndarray,np.ndarray]:
+        """
+        Solve the minimum time snap problem.
+
+        Args:
+            FOkf:   Flat output keyframes to pass through.
+            dTkf:   Time intervals.
+
+        Returns:
+            dT:  Time intervals.
+            Pn:  Polynomial coefficients.
+        """
+
+        # Unpack some stuff
+        Nfo = self.Nfo
+        Nsm = len(dT)
+
+        # Some useful intermediate variables
+        P = self.P_gen(dT)
+        A,b = self.Ab_gen(dT,FOkf)
+
+        # Solve QP to get coefficient solution (spline variables)
+        x = qpsolvers.solve_qp(P,q=None,G=None,h=None,A=A,b=b,solver="osqp")
+        Pn = x.reshape((Nfo,Nsm,-1))
+
+        return dT,Pn
     
-def P_gen(Tp:list[float],Nco:int) -> tuple[np.ndarray,np.ndarray]:
-    # Unpack some stuff
-    Nsm = len(Tp)-1            # Number of segments
+    def get_ideal(self,hz:int|None) -> tuple[np.ndarray,np.ndarray]:
+        """
+        Get the desired time and flat output values. If hz is None,
+        return the keyframe values.
 
-    Plist = []
-    for i in range(0,Nsm):
-        t0 = Tp[i]
-        tf = Tp[i+1]
+        Returns:
+            Ts:  Time values.
+            FO:  Flat output values.
+        """
 
-        for j in range(0,Nfo):
-            P = mu[j]*Ps_gen(Kdr[j],t0,tf,Nco)
-            Plist.append(P)
+        # Unpack some stuff
+        dTd,Pnd = self.dTd,self.Pnd
+        Ndr = self.Ndr
+        
+        # Generate the time and flat output values
+        if hz is None:
+            Ts = np.hstack((0.0,np.cumsum(dTd)))
+        else:
+            tf = np.sum(dTd)
+            Ts = np.linspace(0.0,tf,int(tf*hz)+1)
 
-    P = spl.block_diag(*Plist)
+        FO = th.dTPn_to_FO(Ts,dTd,Pnd,Ndr)
 
-    return P
-
-def Ps_gen(kdr:float,t0:float,tf:float,Nco:int) -> np.ndarray:
-    Ps = np.zeros((Nco,Nco))
-    for i in range(kdr,Nco):
-        for j in range(i,Nco):
-            c1 = cf_gen(i,kdr)
-            c2 = cf_gen(j,kdr)
-            tk = 1+i+j-(kdr*2)
-
-            Pij = c1*c2*((tf**tk)-(t0**tk))/tk
-
-            Ps[i,j] = Pij
-            Ps[j,i] = Pij
-
-    return Ps
-
-def Ab_gen(Tp:list[float],FOp:list[np.ndarray],Nco:int) -> tuple[np.ndarray,np.ndarray]:
-    # Some useful intermediate variables
-    Nsm = len(Tp)-1                            # Number of segments
-
-    # Initialize output variables
-    A = np.zeros((0,(Nco*Nfo*Nsm)))
-    b = np.zeros(0)
-
-    for i in range(Nsm):
-        for j in range(Nfo):
-            idx = (i*Nfo+j)*Nco
-
-            fo0 = FOp[i][j,:]
-            for k in range(fo0.shape[0]):
-                b0 = fo0[k]
-
-                a0 = np.zeros(Nco*Nfo*Nsm)
-                ap = poly2kdr(Tp[i],k,Nco)
-
-                if np.isnan(b0):
-                    pass
-                else:
-                    a0[idx:idx+Nco] = ap
-
-                    A = np.vstack((A,a0))
-                    b = np.append(b,b0)
-
-            fof = FOp[i+1][j,:]
-            for k in range(fof.shape[0]):
-                b0 = fof[k]
-
-                a0 = np.zeros(Nco*Nfo*Nsm)
-                ap = poly2kdr(Tp[i+1],k,Nco)
-
-                if np.isnan(b0):
-                    idxp = ((i+1)*Nfo+j)*Nco
-                    a0[idx:idx+Nco] = ap
-                    a0[idxp:idxp+Nco] = -ap
-
-                    b0 = 0
-                else:
-                    a0[idx:idx+Nco] = ap
-
-                A = np.vstack((A,a0))
-                b = np.append(b,b0)
-
-    return A,b
-
-def cf_gen(N:int,k:int) -> np.float64:
-    cfac = math.factorial(N)/math.factorial(N-k)
-
-    return cfac
-
-def poly2kdr(t:float,kdr:int,Nco:int) -> np.ndarray:
-    a = np.zeros(Nco)
-    for i in range(kdr,Nco):
-        c1 = cf_gen(i,kdr)
-        a[i] = c1*(t**(i-kdr))
-
-    return a
+        return Ts,FO
     
-def SM2CP(SM:np.ndarray,TT:np.ndarray,Nco:int) -> np.ndarray:
-    # Unpack some stuff
-    Nsm = SM.shape[0]
-    Ncp = TT.shape[1]
+    def P_gen(self,dT:list[float],use_sparse:bool=True) -> tuple[np.ndarray,np.ndarray]:
+        """
+        Generates the cost matrix for the minimum snap problem.
 
-    # Output Variable
-    CP = np.zeros((Nsm,Nfo,Ncp))
+        Args:
+            dT:         Time intervals.
+            use_sparse: Use space or time cost matrix.
 
-    # Roll-out trajectory
-    for i in range(0,Nsm):
-        for j in range(0,Nfo):                    # at the ends, so we zero them accordingly.
-            for k in range(0,Ncp):
-                a = poly2kdr(TT[i,k],0,Nco)
-                CP[i,j,k] = a@SM[i,j,:]        
+        Returns:
+            P:  Cost matrix.
+        """
 
-    return CP
+        # Unpack some stuff
+        Nfo,Nco = self.Nfo,self.Nco
+        Kdr = self.Kdr
+
+        # Generate the cost matrix pieces
+        Ps = []
+        for i in range(Nfo):
+            Pi = ph.generate_Q(dT,Kdr[i],Nco)
+            Ps.append(Pi)
+
+        # Assemble the cost matrix
+        P = spl.block_diag(*Ps)
+
+        # Convert the matrix to sparse
+        if use_sparse:
+            P = sps.csc_matrix(P)
+
+        return P
+
+    def Ab_gen(self,dT:list[float],FO:list[list[float]],
+               use_sparse:bool=True) -> tuple[sps.csc_matrix|np.ndarray,np.ndarray]:
+        """
+        Generates the A and b matrices for the minimum snap problem.
+
+        Args:
+            dT:     Time intervals.
+            FOp:    Flat output keyframes to pass through.
+            Nfo:    Number of flat outputs.
+            Nco:    Number of coefficients.
+
+        Returns:
+            A:      A matrix.
+            b:      b vector.
+        """
+
+        # Unpack some stuff
+        Nfo,Ndr = self.Nfo,self.Ndr
+        Nco = self.Nco
+        Nsm = len(dT)
+
+        # Generate continuity and fixed A matrices
+        As,bs = [],[]
+        for i in range(Nfo):
+            Ais,bis = [],[]
+            Ncn = 0
+            for j in range(Nsm):
+                # Extract the flat outputs
+                fo0,fo1 = FO[j][i],FO[j+1][i]
+
+                # Generate the stagewise boundary A matrices
+                A0,A1 = ph.generate_As([0.0,dT[j]],dT[j],Nco,Ndr)
+
+                if j < Nsm-1:
+                    An0 = np.zeros((Ndr,Nco))
+                    Anc = ph.generate_As([0.0],dT[j+1],Nco,Ndr)[0]
+                else:
+                    An0 = np.zeros((Ndr,0))
+                    Anc = np.zeros((Ndr,0))
+
+                Aa = np.hstack((A0, An0))
+                Ab = np.hstack((A1, An0))
+                Ac = np.hstack((A1,-Anc))
+                
+                # Populate
+                Ajs,bjs = [],[]
+                for k,fo in enumerate(fo0):
+                    if np.isnan(fo):
+                        pass
+                    else:
+                        Ajs.append(Aa[k,:])
+                        bjs.append(fo)
+                
+                for k,fo in enumerate(fo1):
+                    if np.isnan(fo):
+                        Ajs.append(Ac[k,:])
+                        bjs.append(0.0)
+                    else:
+                        Ajs.append(Ab[k,:])
+                        bjs.append(fo)
+                        
+                # Stack the A and b matrices for this segment
+                Aj = np.vstack(Ajs)
+                bj = np.vstack(bjs)
+
+                # Add to the segment list
+                Ais.append(Aj)
+                bis.append(bj)
+
+                # Update the number of continuity constraints
+                Ncn += len(bj)
+            
+            # Stack the A and b matrices for this flat output
+            Ai,r0 = np.zeros((Ncn,Nco*Nsm)),0
+            for i in range(len(Ais)):
+                r1 = r0+Ais[i].shape[0]
+                c0,c1 = i*Nco,Ais[i].shape[1]+i*Nco
+                Ai[r0:r1,c0:c1] = Ais[i]
+
+                r0 = r1
+            bi = np.vstack(bis)
+
+            # Add to the list of A and b matrices
+            As.append(Ai)
+            bs.append(bi)
+
+        # Stack the A and b matrices
+        A = spl.block_diag(*As)
+        b = np.vstack(bs)
+
+        # Convert the matrix to sparse
+        if use_sparse:
+            A = sps.csc_matrix(A)
+
+        return A,b

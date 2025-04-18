@@ -165,7 +165,7 @@ class Simulator:
             # Control
             if i % n_sim2ctl == 0:
                 # Get current image
-                Tb2w = th.xv_to_T(xcr)
+                Tb2w = th.x_to_T(xcr)
                 Tc2w = Tb2w@Tc2b
                 icr = self.gsplat.render_rgb(camera,Tc2w)
 

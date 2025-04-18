@@ -3,11 +3,8 @@ import scipy.sparse as sps
 import scipy.linalg as spl
 from scipy.optimize import minimize
 import sys
-import math
-import qpsolvers
 import figs.utilities.polynomial_helper as ph
 import figs.utilities.transform_helper as th
-from figs.dynamics.external_forces import ExternalForces
 
 # Debugging
 np.set_printoptions(threshold=sys.maxsize)
@@ -33,55 +30,132 @@ class MinTimeSnap():
         Kdr = np.array([4,4,4,4])
         Tau = np.array([0.0,1.0])
         Ndr = 5
+        bnds = [(0.05, 10.0)]
 
         Nfo,Ncd = len(Kdr),len(Tau)
 
-        # Extract Flat Output Variables
-        Tp,FO = th.KF_to_TpFO(WPs["keyframes"],Ndr,impose=True)
-
-        # Compute the Q and A matrices and the b vector
-        Qs,As,bs = [],[],[]
-        for i in range(Nfo):
-            kdr = Kdr[i]
-            Nco = Ndr*Ncd
-        
-            Qi = self.build_Q(Tp,kdr,Nco)
-            Ai,bi = self.build_Ab(Tp,Ndr,Nco,FO[:,i,:])
-
-            Qs.append(Qi)
-            As.append(Ai),bs.append(bi)
-
-        Q = sps.block_diag(Qs,format='csc')
-        A = sps.block_diag(As,format='csc')
-        b = np.vstack(bs)
-        iA = ph.get_inverse(A)
-        C,df = self.build_Cdf(b)
-
-        # Save class variables
-        self.Nfo = Nfo
-        self.Tp = Tp
-        self.Q = Q
-        self.iA,self.C,self.df = iA,C,df
-
-        self.A,self.b = A,b
+        # Class constant variables
+        self.Kdr,self.Ndr = Kdr,Ndr
+        self.Nfo,self.Ncd = Nfo,Ncd
+        self.kT,self.bnds = kT,bnds
         self.hz = hz
 
-    def solve(self):
+        # Extract Flat Output Variables (Tp guess and FO desired)
+        Tkf0,FOkf0 = th.KF_to_TpFO(WPs["keyframes"],Ndr)
+        dT0 = np.diff(Tkf0)
+
+        # Get initial solution
+        self.dTd,self.Pnd = self.solve(FOkf0,dT0)
+
+    def solve(self,FOkf:np.ndarray,dT0:np.ndarray=None) -> tuple[np.ndarray,np.ndarray]:
         """
-        Solve the minimum time snap problem using quadratic programming.
+        Solve the minimum time snap problem.
+
+        Args:
+            FOkf:   Flat output keyframes to pass through.
+            dT0:    Initial guess for time intervals.
 
         Returns:
-            Tp:     Time points.
-            Pn:     Flat output array.
+            dT:  Time intervals.
+            Pn:  Polynomial coefficients.
         """
 
         # Unpack some stuff
-        Tp = self.Tp
-        Q = self.Q
-        iA,C,df = self.iA,self.C,self.df
+        kT = self.kT
         Nfo = self.Nfo
-        Nsm = len(Tp)-1
+
+        # Generate the time intervals if not provided
+        if dT0 is None:
+            Nsm = FOkf.shape[0]-1
+            dt0 = self.bnds[1]/2
+            dT0 = dt0*np.ones(Nsm)
+
+        # Some useful constants
+        Nsm = len(dT0)
+        Bnds = self.bnds*Nsm
+
+        # Solve the Time Snap QP
+        res = minimize(lambda dT: self.time_snap_cost(dT,FOkf,kT),
+                            x0=dT0,bounds=Bnds,method='SLSQP',
+                            options={'maxiter': 100}
+                            )
         
+        # Package Results
+        dT = res.x
+        x = self.solve_uqp(dT,FOkf)[0]
+        Pn = x.reshape((Nfo,Nsm,-1))
+
+        return dT,Pn
+    
+    def get_ideal(self,hz:int|None) -> tuple[np.ndarray,np.ndarray]:
+        """
+        Get the desired time and flat output values. If hz is None,
+        return the keyframe values.
+
+        Returns:
+            Ts:  Time values.
+            FO:  Flat output values.
+        """
+
+        # Unpack some stuff
+        dTd,Pnd = self.dTd,self.Pnd
+        Ndr = self.Ndr
+        
+        # Generate the time and flat output values
+        if hz is None:
+            Ts = np.hstack((0.0,np.cumsum(dTd)))
+        else:
+            tf = np.sum(dTd)
+            Ts = np.linspace(0.0,tf,int(tf*hz)+1)
+
+        FO = th.dTPn_to_FO(Ts,dTd,Pnd,Ndr)
+
+        return Ts,FO
+        
+    def time_snap_cost(self,dT:np.ndarray,FOkf:np.ndarray,kT:float) -> float:
+        """
+        Compute the cost function for the minimum time snap problem.
+
+        Args:
+            dT:     Time intervals.
+            FOkf:   Flat output keyframes to pass through.
+            kT:     Minimum time weight.
+
+        Returns:
+            J:   Cost function value.
+        """
+
+        # Solve the unconstrained quadratic program
+        x,Q = self.solve_uqp(dT,FOkf)
+
+        # Compute the cost
+        J = x.T@Q@x + kT*sum(dT)
+
+        return J
+        
+    def solve_uqp(self,dT:np.ndarray,FOkf:np.ndarray):
+        """
+        Solve the minimum snap problem (given fixed time) using unconstrained
+        quadratic programming.
+        
+        Args:
+            dT:     Time intervals.
+            FOkf:   Flat output keyframes to pass through.
+
+        Returns:
+            x:  Coefficients of the polynomial.
+            Q:  Quadratic cost matrix.
+        """
+
+        # Compute the Q and A matrices and the b vector
+        Q = self.build_Q(dT)
+        A,b = self.build_Ab(dT,FOkf)
+
+        # Compute the extensions
+        iA = ph.get_inverse(A)
+        C,df = self.build_Cdf(b)
+
+        # Solve the quadratic program
         if df.shape[0] != C.shape[0]:
             # Compute R
             R = C@iA.T@Q@iA@C.T
@@ -97,78 +171,100 @@ class MinTimeSnap():
         else:
             d = df
 
-        p = iA@C.T@d
+        # Extract the coefficients
+        x = iA@C.T@d
 
-        # Package
-        Pn = p.reshape((Nfo,Nsm,-1))
+        return x,Q
 
-        return Tp,Pn
-
-    def build_Q(self,Tp:np.ndarray,kdr:int,Nco:int):
+    def build_Q(self,dT:np.ndarray,use_sparse:bool=True) -> sps.csc_matrix|np.ndarray:
         """
-        Generate the Q matrix for the quadratic program.
+        Generate the cost matrix for the quadratic program.
 
         Args:
-            Tp:  Time points.
-            kdr: Number of derivatives.
-            Nco: Number of coefficients.
+            dT:         Time intervals.
+            use_sparse: Use sparse matrix format.
 
         Returns:
-            Q:  Quadratic matrix.
+            Q:  Cost matrix.
         """
 
-        # Generate the Q matrix
-        Q = ph.generate_Q(Tp,kdr,Nco)
+        # Unpack some stuff
+        Nfo,Ndr = self.Nfo,self.Ndr
+        Ncd,Kdr = self.Ncd,self.Kdr
+
+        # Generate the cost matrix pieces
+        Qs = []
+        for i in range(Nfo):
+            kdr = Kdr[i]
+            Nco = Ndr*Ncd
+        
+            Qi = ph.generate_Q(dT,kdr,Nco)
+            Qs.append(Qi)
+
+        # Assemble the cost matrix
+        Q = spl.block_diag(*Qs)
+
+        # Convert the matrix to sparse
+        if use_sparse:
+            Q = sps.csc_matrix(Q)
 
         return Q
     
-    def build_Ab(self,Tp:np.ndarray,Ndr:int,Nco:int,FOi:np.ndarray,
+    def build_Ab(self,dT:np.ndarray,FO:np.ndarray,
                  use_sparse:bool=True) -> tuple[sps.csc_matrix|np.ndarray,np.ndarray]:
         """
-        Generate the A inverse matrix for the quadratic program.
+        Generate the A matrix and b vector for the quadratic program.
 
         Args:
-            Tp:         Time points.
-            Ndr:        Number of the derivatives.
-            Nco:        Number of coefficients.
-            FOi:        Array of derivatives of a given flat output
+            dT:         Time intervals.
+            FO:         Flat outputs
             use_sparse: Use sparse matrix format.
 
         Returns:
             A:  Constraint matrix.
             b:  Constraint vector.
         """
-
         # Unpack some stuff
-        Nsm = len(Tp)-1
-        
+        Nfo,Ndr = self.Nfo,self.Ndr
+        Ncd = self.Ncd
+
+        Nsm = len(dT)
+        Nco = Ndr*Ncd
+
         # Generate continuity and fixed A matrices
-        Abd = np.zeros(((Nsm+1)*Ndr,Nsm*Nco))
-        Acn = np.zeros(((Nsm-1)*Ndr,Nsm*Nco))
-        for i in range(Nsm):
-            # Calculate the indices
-            r0,r1 = i*Ndr,(i+1)*Ndr
-            c0,c1cn,c1bd = i*Nco,(i+2)*Nco,(i+1)*Nco
+        As,bs = [],[]
+        for i in range(Nfo):
+            # Generate continuity and fixed A matrices
+            Abd = np.zeros(((Nsm+1)*Ndr,Nsm*Nco))
+            Acn = np.zeros(((Nsm-1)*Ndr,Nsm*Nco))
+            for j in range(Nsm):
+                # Calculate the indices
+                r0,r1 = j*Ndr,(j+1)*Ndr
+                c0,c1cn,c1bd = j*Nco,(j+2)*Nco,(j+1)*Nco
 
-            # Generate the stagewise boundary A matrices
-            t0,t1 = Tp[i],Tp[i+1]
-            A0,A1 = ph.generate_As([t0,t1],t0,t1,Nco,Ndr)
+                # Generate the stagewise boundary A matrices
+                A0,A1 = ph.generate_As([0.0,dT[j]],dT[j],Nco,Ndr)
 
-            # Populate the matrices
-            Abd[r0:r1,c0:c1bd] = A0
-            if i < Nsm-1:
-                A2 = ph.generate_As([t1],t1,Tp[i+2],Nco,Ndr)[0]
-                Acn[r0:r1,c0:c1cn] = np.hstack((-A1,A2))
-            
-        Abd[-Ndr:,-Nco:] = A1           # Last row
+                # Populate the matrices
+                Abd[r0:r1,c0:c1bd] = A0
+                if j < Nsm-1:
+                    A2 = ph.generate_As([0.0],dT[j+1],Nco,Ndr)[0]
+                    Acn[r0:r1,c0:c1cn] = np.hstack((-A1,A2))
+                
+            Abd[-Ndr:,-Nco:] = A1           # Last row
 
-        # Generate the continuity and fixed b vectors
-        bbd = FOi.reshape((-1,1))
-        bcn = np.zeros(((Nsm-1)*Ndr,1))
+            # Generate the continuity and fixed b vectors
+            bbd = FO[:,i,:].reshape((-1,1))
+            bcn = np.zeros(((Nsm-1)*Ndr,1))
 
-        # Stack the A and b matrices
-        A = np.vstack((Abd,Acn))
-        b = np.vstack((bbd,bcn))
+            # Stack the A and b matrices
+            Ai = np.vstack((Abd,Acn))
+            bi = np.vstack((bbd,bcn))
+
+            As.append(Ai),bs.append(bi)
+
+        A = spl.block_diag(*As)
+        b = np.vstack(bs)
 
         # Convert the matrix to sparse
         if use_sparse:

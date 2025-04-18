@@ -3,7 +3,6 @@ import shutil
 import os
 import numpy as np
 import scipy.linalg
-import figs.tsplines.min_snap as ms
 import figs.utilities.transform_helper as th
 import figs.dynamics.quadcopter_model as qm
 
@@ -13,6 +12,7 @@ from casadi import vertcat
 from acados_template import AcadosOcp, AcadosOcpSolver
 from figs.control.base_controller import BaseController
 from figs.dynamics.external_forces import ExternalForces
+from figs.tsplines.min_snap import MinSnap
 
 class VehicleRateMPC(BaseController):
     def __init__(self,
@@ -67,31 +67,34 @@ class VehicleRateMPC(BaseController):
         super().__init__(configs_path)
 
         # (MPC) Policy Parameters
-        hz_ctl,Nhn,Ws = policy["hz"],policy["horizon"],np.diag(policy["Ws"])
+        hz,Nhn,Ws = policy["hz"],policy["horizon"],np.diag(policy["Ws"])
         Qk,Rk,QN = np.diag(policy["Qk"]),np.diag(policy["Rk"]),np.diag(policy["QN"])
         lbu,ubu = np.array(policy["bounds"]["lower"]),np.array(policy["bounds"]["upper"])
 
         nx,nu = len(policy["Qk"]), len(policy["Rk"])
-        ns = int(hz_ctl/5)
+        ns = int(hz/5)
         ny,ny_e = nx+nu,nx
 
         # Course Parameters
         WPs = course["waypoints"]
         Fcfg = course["forces"]
-
-        WPs_pd = self.pad_trajectory(WPs,Nhn,hz_ctl)
-        Tsd,FOd = ms.solve(WPs_pd,hz_ctl)["FO"]
-        Fex = ExternalForces(Fcfg)
-
+        
         # Frame Parameters
         if frame is None:       # Use placeholder values
             m,kt = 1.0,7.0
         else:
             m,kt = frame["mass"],frame["motor_thrust_coeff"]
-
         p = np.hstack((m,kt,np.zeros(3)))
-        tXUd = th.TsFO_to_tXU(Tsd,FOd,m,kt,Fex)
         
+        # Get initial solution (padded)
+        # WPs = self.pad_trajectory(WPs,Nhn,hz)
+        ms = MinSnap(WPs,hz)
+        Tsd,FOd = ms.get_ideal(hz)
+
+        Fex = ExternalForces(Fcfg)
+
+        tXUd = th.TsFO_to_tXU(Tsd,FOd,m,kt,Fex)
+
         # =====================================================================
         # Setup Acados Variables
         # =====================================================================
@@ -130,7 +133,7 @@ class VehicleRateMPC(BaseController):
             ocp.solver_options.nlp_solver_type = 'SQP'
 
         ocp.solver_options.qp_solver_cond_N = Nhn
-        ocp.solver_options.tf = Nhn/hz_ctl
+        ocp.solver_options.tf = Nhn/hz
         ocp.solver_options.qp_solver_warm_start = 1
 
         solver = AcadosOcpSolver(ocp,json_file=solver_json,verbose=False)
@@ -146,12 +149,11 @@ class VehicleRateMPC(BaseController):
         # ---------------------------------------------------------------------
         # Necessary Variables for Base Controller -----------------------------
         self.name = name
-        self.hz = hz_ctl
+        self.hz = hz
         self.Nznn = {}
         self.nhy = 0
 
         # ---------------------------------------------------------------------
-
         # Controller Specific Variables
         self.Nx,self.Nu = nx,nu
         self.Tsd,self.FOd = Tsd,FOd
@@ -191,7 +193,7 @@ class VehicleRateMPC(BaseController):
                 upr:np.ndarray=None,
                 obj:np.ndarray=None,
                 icr:None=None,zcr:None=None) -> tuple[
-                    np.ndarray,None,None,np.ndarray]:
+                    np.ndarray,None,np.ndarray]:
         
         """
         Method to compute the control input for the VehicleRateMPC controller. We use the standard input arguments
