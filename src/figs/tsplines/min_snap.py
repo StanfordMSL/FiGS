@@ -2,7 +2,6 @@ import numpy as np
 import scipy.sparse as sps
 import scipy.linalg as spl
 import sys
-import math
 import qpsolvers
 import figs.utilities.transform_helper as th
 import figs.utilities.polynomial_helper as ph
@@ -90,7 +89,7 @@ class MinSnap():
             Ts = np.hstack((0.0,np.cumsum(dTd)))
         else:
             tf = np.sum(dTd)
-            Ts = np.linspace(0.0,tf,int(tf*hz)+1)
+            Ts = np.arange(0.0,tf,1/hz)
 
         FO = th.dTPn_to_FO(Ts,dTd,Pnd,Ndr)
 

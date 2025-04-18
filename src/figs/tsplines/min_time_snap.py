@@ -67,7 +67,7 @@ class MinTimeSnap():
         # Generate the time intervals if not provided
         if dT0 is None:
             Nsm = FOkf.shape[0]-1
-            dt0 = self.bnds[1]/2
+            dt0 = self.bnds[0][1]/2
             dT0 = dt0*np.ones(Nsm)
 
         # Some useful constants
@@ -106,12 +106,12 @@ class MinTimeSnap():
             Ts = np.hstack((0.0,np.cumsum(dTd)))
         else:
             tf = np.sum(dTd)
-            Ts = np.linspace(0.0,tf,int(tf*hz)+1)
+            Ts = np.arange(0.0,tf,1/hz)
 
         FO = th.dTPn_to_FO(Ts,dTd,Pnd,Ndr)
 
         return Ts,FO
-        
+    
     def time_snap_cost(self,dT:np.ndarray,FOkf:np.ndarray,kT:float) -> float:
         """
         Compute the cost function for the minimum time snap problem.

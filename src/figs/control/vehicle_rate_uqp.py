@@ -40,6 +40,7 @@ class VehicleRateUQP(BaseController):
 
         # Frame Parameters
         if frame is None:       # Use placeholder values
+            print("VehicleRateMPC initialized with placeholder frame parameters.")
             m,kt = 1.0,7.0
         else:
             m,kt = frame["mass"],frame["motor_thrust_coeff"]
@@ -52,7 +53,7 @@ class VehicleRateUQP(BaseController):
 
         tXUd = th.TsFO_to_tXU(Tsd,FOd,m,kt,Fex)
 
-         # =====================================================================
+        # =====================================================================
         # Controller Variables
         # =====================================================================
 
@@ -66,9 +67,25 @@ class VehicleRateUQP(BaseController):
         # ---------------------------------------------------------------------
         # Controller Specific Variables
         self.mts = mts
+        self.Tsd,self.FOd = Tsd,FOd
         self.tXUd = tXUd
         self.m,self.kt = m,kt
         self.Fex = Fex
+
+    def update_frame(self,frame:dict) -> None:
+        """
+        Method to update the frame related variables of the controller.
+        
+        Args:
+            - frame: Config Dict of the (drone) frame.
+
+        """
+        m,kt = frame["mass"],frame["motor_thrust_coeff"]
+        
+        tXUd = th.TsFO_to_tXU(self.Tsd,self.FOd,m,kt,self.Fex)
+
+        self.tXUd = tXUd
+        self.m,self.kt = m,kt
 
     def control(self,tcr:float,xcr:np.ndarray,
                 upr:np.ndarray=None,
@@ -80,24 +97,30 @@ class VehicleRateUQP(BaseController):
         _ = upr,obj,icr,zcr
         Nfo,Ndr = self.mts.Nfo,self.mts.Ndr
         Tpkf,FOkf = self.mts.get_ideal(None)
+        Tsd,FOd = self.Tsd,self.FOd
         m,kt = self.m,self.kt
         Fex = self.Fex
 
+        # ===================================================================
+        thn = 1.0
+        Nhn = int(thn*self.hz)
+        # ===================================================================
+        
         # Start timer
         t0 = time.time()
 
-        # Compute target keyframe
+        # Start point
         FO1 = th.x_to_fo(xcr,Nfo,Ndr)[None,:,:]
-        pos_l2_err = np.linalg.norm(FOkf[:,0:3,0]-FO1[:,0:3,0],axis=1)
-        kf = np.argmin(pos_l2_err)+1
-        kf = np.clip(kf,0,FOkf.shape[0]-1)
 
-        # Get target trajectory
-        FO2 = FOkf[kf:kf+1]
-        tf = Tpkf[kf]
+        # End point
+        # pos_l2_err = np.linalg.norm(FOd[:,0:3,0]-FO1[:,0:3,0],axis=1)
+        # idx = np.argmin(pos_l2_err)+Nhn
+        idx = np.where(Tsd<=tcr)[0][-1]+Nhn
+        idx = np.clip(idx,0,FOd.shape[0]-1)
+        FO2 = FOd[idx:idx+1,:,:]
 
         FOcr = np.concatenate((FO1,FO2),axis=0)
-        dTcr = np.array([tf-tcr])
+        dTcr = np.array([thn])
 
         # Solve
         t1 = time.time()

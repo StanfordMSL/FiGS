@@ -80,14 +80,15 @@ class VehicleRateMPC(BaseController):
         Fcfg = course["forces"]
         
         # Frame Parameters
-        if frame is None:       # Use placeholder values
+        if frame is None:
+            print("VehicleRateMPC initialized with placeholder frame parameters.")
             m,kt = 1.0,7.0
         else:
             m,kt = frame["mass"],frame["motor_thrust_coeff"]
         p = np.hstack((m,kt,np.zeros(3)))
         
         # Get initial solution (padded)
-        # WPs = self.pad_trajectory(WPs,Nhn,hz)
+        WPs = self.pad_trajectory(WPs,Nhn,hz)
         ms = MinSnap(WPs,hz)
         Tsd,FOd = ms.get_ideal(hz)
 
