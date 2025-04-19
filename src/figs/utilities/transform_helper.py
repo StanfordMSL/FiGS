@@ -151,7 +151,7 @@ def TpCP_to_TsFO(Tp:np.ndarray,CP:np.ndarray,
 
 def TsFO_to_tXU(Ts:np.ndarray,FO:np.ndarray,
                 m:float,kt:float,
-                Fext:ExternalForces|None,
+                fext:ExternalForces|None,
                 n_mtr:int=4,ndim:int=15) -> np.ndarray:
     """
     Converts a sequence of trajectory sequence times and flat outputs to a state
@@ -162,7 +162,7 @@ def TsFO_to_tXU(Ts:np.ndarray,FO:np.ndarray,
         - FO:       Flat outputs.
         - m:        Mass of the quadcopter.
         - kt:       Total motor thrust coefficient.
-        - Fext:     External forces object.
+        - fext:     External forces object.
         - n_mtr:    Number of motors
         - ndim:     Number of dimensions in the state vector.
 
@@ -177,14 +177,14 @@ def TsFO_to_tXU(Ts:np.ndarray,FO:np.ndarray,
     # Compute flat outputs
     for k in range(N):
         # Compute External Forces (if any)
-        if Fext is None:
-            fext = np.zeros(3)
+        if fext is None:
+            fk = np.zeros(3)
         else:
             pv = FO[0:3,0,:].flatten()
-            fext = Fext.get_forces(pv)
+            fk = fext.get_forces(pv)
 
         # Compute state vector and control input
-        xu = fo_to_xu(FO[k,:,:],m,kt,fext,n_mtr)
+        xu = fo_to_xu(FO[k,:,:],m,kt,fk,n_mtr)
 
         # Store in output variable
         tXU[0,k] = Ts[k]
@@ -194,7 +194,7 @@ def TsFO_to_tXU(Ts:np.ndarray,FO:np.ndarray,
 
 def TpCP_to_tXU(Tp:np.ndarray,CP:np.ndarray,
                 hz:int=20,m:float=1.0,kt:float=1.0,
-                Fext:ExternalForces|None=None,
+                fext:ExternalForces|None=None,
                 n_mtr:int=4,ndim:int=15) -> np.ndarray:
     """
     Converts a trajectory spline (defined by Tp,CP) to a state vector and control
@@ -206,7 +206,7 @@ def TpCP_to_tXU(Tp:np.ndarray,CP:np.ndarray,
         - hz:       Control loop frequency.
         - m:        Mass of the quadcopter.
         - kt:       Total motor thrust coefficient.
-        - Fext:     External forces object.
+        - fext:     External forces object.
         - n_mtr:    Number of motors
         - ndim:     Number of dimensions in the state vector.
 
@@ -216,7 +216,7 @@ def TpCP_to_tXU(Tp:np.ndarray,CP:np.ndarray,
 
     Ts,FO = TpCP_to_TsFO(Tp,CP,hz)
 
-    tXU = TsFO_to_tXU(Ts,FO,m,kt,Fext,n_mtr,ndim)
+    tXU = TsFO_to_tXU(Ts,FO,m,kt,fext,n_mtr,ndim)
 
     return tXU
 
@@ -306,6 +306,31 @@ def dTPn_to_FO(Ts:np.ndarray,dT:np.ndarray,Pn:np.ndarray,Ndr:int=4) -> tuple[np.
             FO[i,j,:] = Ai@Pn[j,idx,:]
 
     return FO
+
+def dTPn_to_TsFO(dT:np.ndarray,Pn:np.ndarray,Ndr:int,hz:int) -> tuple[np.ndarray,np.ndarray]:
+    """
+    Get the desired time and flat output values. If hz is None,
+    return the keyframe values.
+
+    Args:
+        dT:  Time intervals.
+        Pn:  Polynomial coefficients.
+        Ndr: Number of derivatives.
+        hz:  Sampling frequency.
+
+    Returns:
+        Ts:  Time values.
+        FO:  Flat output values.
+    """
+
+    # Generate the time and flat output values
+    Tkf = np.hstack((0.0,np.cumsum(dT)))
+    Ndt = int(np.ceil(Tkf[-1]*hz))+1
+
+    Ts = np.linspace(0.0,(Ndt-1)/hz,Ndt)
+    FO = dTPn_to_FO(Ts,dT,Pn,Ndr)
+
+    return Ts,FO
 
 def dTPn_to_tXU(Ts:np.ndarray,dT:np.ndarray,Pn:np.ndarray,
                 m:float,kt:float,

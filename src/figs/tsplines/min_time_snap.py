@@ -15,39 +15,50 @@ class MinTimeSnap():
     Class for generating minimum time snap trajectories.
     """
 
-    def __init__(self, WPs:dict[str,int|tuple[np.float64,np.ndarray]],
-                 kT:float,hz:int):
+    def __init__(self,
+                 WPs:dict[str,int|tuple[np.float64,np.ndarray]],
+                 hz:int,kT:float|None,use_l2_time:bool=False,
+                 Kdr:np.ndarray=np.array([4,4,4,2]),
+                 Tau:np.ndarray=np.array([0.0,1.0]),
+                 bnds:tuple[float,float]=(0.01, 30.00)) -> None:
         """
         Initialize the class with waypoints and sampling frequency.
 
         Args:
-            WPs:    Dictionary containing the course configuration.
-            kT:     Minimum time weight.
-            hz:     Sampling frequency.
+            WPs:            Dictionary containing the course configuration.
+            hz:             Sampling frequency.
+            kT:             Minimum time weight (None if only minimum snap).
+            use_l2_time:    Use L2 time cost (True) or L1 time cost (False).
+            Kdr:            Derivative order for each flat output cost.
+            Tau:            Normalized time intervals for constraints.
+            bnds:           Bounds for the time intervals.
         """
 
-        # Some class constants
-        Kdr = np.array([4,4,4,4])
-        Tau = np.array([0.0,1.0])
-        Ndr = 5
-        bnds = [(0.05, 10.0)]
-
+        # Some useful constants
+        Ndr = np.max(Kdr)+1
         Nfo,Ncd = len(Kdr),len(Tau)
 
-        # Class constant variables
+        # Extract Flat Output Variables (Tp guess and FO desired)
+        Tkf0,FOkf = th.KF_to_TpFO(WPs["keyframes"],Ndr)
+        dT0 = np.diff(Tkf0)
+
+        # Class compute variables
         self.Kdr,self.Ndr = Kdr,Ndr
         self.Nfo,self.Ncd = Nfo,Ncd
         self.kT,self.bnds = kT,bnds
-        self.hz = hz
+        self.use_l2_time = use_l2_time
 
-        # Extract Flat Output Variables (Tp guess and FO desired)
-        Tkf0,FOkf0 = th.KF_to_TpFO(WPs["keyframes"],Ndr)
-        dT0 = np.diff(Tkf0)
+        # Compute initial solution
+        dTd,Pnd = self.solve(FOkf,dT0)
+        Tkf = np.hstack((0.0,np.cumsum(dTd)))
+        Ts,FO = th.dTPn_to_TsFO(dTd,Pnd,Ndr,hz)
 
-        # Get initial solution
-        self.dTd,self.Pnd = self.solve(FOkf0,dT0)
+        # Class trajectory variables
+        self.dTd,self.Pnd = dTd,Pnd
+        self.Tkf,self.FOkf = Tkf,FOkf
+        self.Tsd,self.FOd = Ts,FO
 
-    def solve(self,FOkf:np.ndarray,dT0:np.ndarray=None) -> tuple[np.ndarray,np.ndarray]:
+    def solve(self,FOkf:np.ndarray=None,dT0:np.ndarray=None) -> tuple[np.ndarray,np.ndarray]:
         """
         Solve the minimum time snap problem.
 
@@ -64,53 +75,31 @@ class MinTimeSnap():
         kT = self.kT
         Nfo = self.Nfo
 
-        # Generate the time intervals if not provided
-        if dT0 is None:
-            Nsm = FOkf.shape[0]-1
-            dt0 = self.bnds[0][1]/2
-            dT0 = dt0*np.ones(Nsm)
+        # Generate the keyframes and time intervals if not provided
+        if FOkf is None and dT0 is None:
+            FOkf = self.FOkf
+            dT0 = self.dTd
 
         # Some useful constants
         Nsm = len(dT0)
-        Bnds = self.bnds*Nsm
+        Bnds = [self.bnds]*Nsm
 
         # Solve the Time Snap QP
-        res = minimize(lambda dT: self.time_snap_cost(dT,FOkf,kT),
-                            x0=dT0,bounds=Bnds,method='SLSQP',
-                            options={'maxiter': 100}
-                            )
-        
+        if kT is not None:
+            res = minimize(
+                lambda dT: self.time_snap_cost(dT, FOkf, kT),
+                x0=dT0, bounds=Bnds, method='SLSQP',
+                options={'maxiter': 100, 'disp': False}
+            )
+            dT = res.x
+        else:
+            dT = dT0
+
         # Package Results
-        dT = res.x
         x = self.solve_uqp(dT,FOkf)[0]
         Pn = x.reshape((Nfo,Nsm,-1))
 
         return dT,Pn
-    
-    def get_ideal(self,hz:int|None) -> tuple[np.ndarray,np.ndarray]:
-        """
-        Get the desired time and flat output values. If hz is None,
-        return the keyframe values.
-
-        Returns:
-            Ts:  Time values.
-            FO:  Flat output values.
-        """
-
-        # Unpack some stuff
-        dTd,Pnd = self.dTd,self.Pnd
-        Ndr = self.Ndr
-        
-        # Generate the time and flat output values
-        if hz is None:
-            Ts = np.hstack((0.0,np.cumsum(dTd)))
-        else:
-            tf = np.sum(dTd)
-            Ts = np.arange(0.0,tf,1/hz)
-
-        FO = th.dTPn_to_FO(Ts,dTd,Pnd,Ndr)
-
-        return Ts,FO
     
     def time_snap_cost(self,dT:np.ndarray,FOkf:np.ndarray,kT:float) -> float:
         """
@@ -129,7 +118,13 @@ class MinTimeSnap():
         x,Q = self.solve_uqp(dT,FOkf)
 
         # Compute the cost
-        J = x.T@Q@x + kT*sum(dT)
+        snap_cost = x.T@Q@x
+        if self.use_l2_time:
+            time_cost = kT*(dT.T@dT)
+        else:
+            time_cost = kT*np.sum(dT)
+
+        J = snap_cost + time_cost
 
         return J
         
@@ -304,3 +299,39 @@ class MinTimeSnap():
             C = sps.csc_matrix(C)
 
         return C,df
+    
+    def get_desired_trajectory(self) -> tuple[np.ndarray,np.ndarray]:
+        """
+        Get the time and flat output trajectory values.
+
+        Returns:
+            Ts:  Time values.
+            FO:  Flat output values.
+        """
+
+        # Return the time and flat output values
+        return self.Tsd,self.FOd
+    
+    def get_velocity_statistics(self,FO:np.ndarray=None) -> tuple[float,float,float]:
+        """
+        Get the velocity statistics.
+
+        Returns:
+            v_mean:  Mean velocity.
+            v_std:   Standard deviation of velocity.
+            v_max:   Maximum velocity.
+        """
+        
+        # Unpack some stuff
+        if FO is None:
+            FO = self.FOd
+
+        # Compute velocity statistics
+        Vmag = np.linalg.norm(FO[:,0:3,1],axis=1)
+        v_mean = np.mean(Vmag)
+        v_std = np.std(Vmag)
+        v_max = np.max(Vmag)
+        
+        # Return the velocity statistics
+        return v_mean,v_std,v_max
+    

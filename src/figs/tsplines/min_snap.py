@@ -15,34 +15,40 @@ class MinSnap():
     Class for generating minimum snap trajectories.
     """
 
-    def __init__(self, WPs:dict[str,int|tuple[np.float64,np.ndarray]],hz:int=20):
+    def __init__(self,
+                 WPs:dict[str,int|tuple[np.float64,np.ndarray]],
+                 hz:int,
+                 Kdr:np.ndarray=np.array([4,4,4,2])) -> None:
         """
         Initialize the class with waypoints and sampling frequency.
 
         Args:
             WPs:    Dictionary containing the course configuration.
             hz:     Sampling frequency.
-
+            Kdr:    Derivative order for each flat output cost.
         """
         
-        # Some class constants
-        Kdr = np.array([4,4,4,4])
-        Ndr = 5
-        
+        # Some useful constants
+        Ndr = np.max(Kdr)+1
         Nfo,Nco = len(Kdr),WPs["Nco"]
-
-        # Class constant variables
-        self.Kdr,self.Ndr = Kdr,Ndr
-        self.Nfo,self.Nco = Nfo,Nco
-        self.hz = hz
 
         # Extract Flat Output Variables (Tp desired and FO desired)
         Tkf,FOkf = th.KF_to_TpFO(WPs["keyframes"],None)
         dT = np.diff(Tkf)
 
-        # Get initial solution
-        self.dTd,self.Pnd = self.solve(FOkf,dT)
+        # Class compute variables
+        self.Kdr,self.Ndr = Kdr,Ndr
+        self.Nfo,self.Nco = Nfo,Nco
 
+        # Compute initial solution
+        dTd,Pnd = self.solve(FOkf,dT)
+        Ts,FO = th.dTPn_to_TsFO(dTd,Pnd,Ndr,hz)
+
+        # Class trajectory variables
+        self.dTd,self.Pnd = dTd,Pnd
+        self.Tkf,self.FOkf = Tkf,FOkf
+        self.Tsd,self.FOd = Ts,FO
+    
     def solve(self,FOkf:np.ndarray,dT:np.ndarray) -> tuple[np.ndarray,np.ndarray]:
         """
         Solve the minimum time snap problem.
@@ -69,31 +75,6 @@ class MinSnap():
         Pn = x.reshape((Nfo,Nsm,-1))
 
         return dT,Pn
-    
-    def get_ideal(self,hz:int|None) -> tuple[np.ndarray,np.ndarray]:
-        """
-        Get the desired time and flat output values. If hz is None,
-        return the keyframe values.
-
-        Returns:
-            Ts:  Time values.
-            FO:  Flat output values.
-        """
-
-        # Unpack some stuff
-        dTd,Pnd = self.dTd,self.Pnd
-        Ndr = self.Ndr
-        
-        # Generate the time and flat output values
-        if hz is None:
-            Ts = np.hstack((0.0,np.cumsum(dTd)))
-        else:
-            tf = np.sum(dTd)
-            Ts = np.arange(0.0,tf,1/hz)
-
-        FO = th.dTPn_to_FO(Ts,dTd,Pnd,Ndr)
-
-        return Ts,FO
     
     def P_gen(self,dT:list[float],use_sparse:bool=True) -> tuple[np.ndarray,np.ndarray]:
         """
@@ -221,3 +202,38 @@ class MinSnap():
             A = sps.csc_matrix(A)
 
         return A,b
+
+    def get_desired_trajectory(self) -> tuple[np.ndarray,np.ndarray]:
+        """
+        Get the time and flat output trajectory values.
+
+        Returns:
+            Ts:  Time values.
+            FO:  Flat output values.
+        """
+
+        # Return the time and flat output values
+        return self.Tsd,self.FOd
+    
+    def get_velocity_statistics(self,FO:np.ndarray=None) -> tuple[float,float,float]:
+        """
+        Get the velocity statistics.
+
+        Returns:
+            v_mean:  Mean velocity.
+            v_std:   Standard deviation of velocity.
+            v_max:   Maximum velocity.
+        """
+        
+        # Unpack some stuff
+        if FO is None:
+            FO = self.FOd
+
+        # Compute velocity statistics
+        Vmag = np.linalg.norm(FO[:,0:3,1],axis=1)
+        v_mean = np.mean(Vmag)
+        v_std = np.std(Vmag)
+        v_max = np.max(Vmag)
+        
+        # Return the velocity statistics
+        return v_mean,v_std,v_max

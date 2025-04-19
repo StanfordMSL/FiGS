@@ -12,7 +12,7 @@ from casadi import vertcat
 from acados_template import AcadosOcp, AcadosOcpSolver
 from figs.control.base_controller import BaseController
 from figs.dynamics.external_forces import ExternalForces
-from figs.tsplines.min_snap import MinSnap
+from figs.tsplines.min_time_snap import MinTimeSnap
 
 class VehicleRateMPC(BaseController):
     def __init__(self,
@@ -35,26 +35,25 @@ class VehicleRateMPC(BaseController):
             - solver_json:  Name of the solver JSON file.
 
         Variables:
-            - hz:              Controller frequency.
-            - nzcr:            Feature vector size (if controller uses learned feedback. Set to None if not used).
+            - hz:               Controller frequency.
+            - nzcr:             Feature vector size (if controller uses learned feedback. Set to None if not used).
 
-            - Nx:              Number of states.
-            - Nu:              Number of inputs.
-            - p:               Model Parameters. (mass,thrust,fx,fy,fz)
-            - Tpd:             Ideal TSpline time vector.
-            - CPd:             Ideal TSpline control points.
-            - tXUd:            Desired trajectory.
-            - Fext:            External forces.
-            - Qk:              State cost.
-            - Rk:              Input cost.
-            - QN:              Final state cost.
-            - lbu:             Lower bound on inputs.
-            - ubu:             Upper bound on inputs.
-            - Ws:              Search cost.
-            - ns:              Number of states to consider.
-            - use_RTI:         Use RTI flag.
-            - model:           Model of the system.
-            - solver:          Solver object.
+            - Nx:               Number of states.
+            - Nu:               Number of inputs.
+            - p:                Model Parameters. (mass,thrust,fx,fy,fz)
+            - Tpd:              Ideal TSpline time vector.
+            - CPd:              Ideal TSpline control points.
+            - tXUd:             Desired trajectory.
+            - fex:              External forces.
+            - Qk:               State cost.
+            - Rk:               Input cost.
+            - QN:               Final state cost.
+            - lbu:              Lower bound on inputs.
+            - ubu:              Upper bound on inputs.
+            - Ws:               Search cost.
+            - use_RTI:          Use RTI flag.
+            - model:            Model of the system.
+            - solver:           Solver object.
             - code_export_path: Path to the generated code.
 
         """
@@ -66,35 +65,36 @@ class VehicleRateMPC(BaseController):
         # Initialize the BaseController
         super().__init__(configs_path)
 
-        # (MPC) Policy Parameters
-        hz,Nhn,Ws = policy["hz"],policy["horizon"],np.diag(policy["Ws"])
-        Qk,Rk,QN = np.diag(policy["Qk"]),np.diag(policy["Rk"]),np.diag(policy["QN"])
-        lbu,ubu = np.array(policy["bounds"]["lower"]),np.array(policy["bounds"]["upper"])
+        # Policy Parameters
+        plan,track = policy["plan"],policy["track"]
 
-        nx,nu = len(policy["Qk"]), len(policy["Rk"])
-        ns = int(hz/5)
-        ny,ny_e = nx+nu,nx
+        kT,use_l2_time = plan["kT"],plan["use_l2_time"]
+
+        hz,Nhn = track["hz"],track["horizon"]
+        Qk,Rk,QN = np.diag(track["Qk"]),np.diag(track["Rk"]),np.diag(track["QN"])
+        Ws = np.diag(track["Ws"])
+        lbu,ubu = np.array(track["bounds"]["lower"]),np.array(track["bounds"]["upper"])
 
         # Course Parameters
-        WPs = course["waypoints"]
-        Fcfg = course["forces"]
+        WPs_cfg,Fs_cfg = course["waypoints"],course["forces"]
         
         # Frame Parameters
         if frame is None:
-            print("VehicleRateMPC initialized with placeholder frame parameters.")
             m,kt = 1.0,7.0
         else:
             m,kt = frame["mass"],frame["motor_thrust_coeff"]
         p = np.hstack((m,kt,np.zeros(3)))
+
+        # Some useful constants
+        nx,nu = Qk.shape[0], Rk.shape[0]
+        ny,ny_e = nx+nu,nx
         
-        # Get initial solution (padded)
-        WPs = self.pad_trajectory(WPs,Nhn,hz)
-        ms = MinSnap(WPs,hz)
-        Tsd,FOd = ms.get_ideal(hz)
+        # Get initial solution
+        mts = MinTimeSnap(WPs_cfg,hz,kT,use_l2_time)
+        fex = ExternalForces(Fs_cfg)
 
-        Fex = ExternalForces(Fcfg)
-
-        tXUd = th.TsFO_to_tXU(Tsd,FOd,m,kt,Fex)
+        Tsd,FOd = mts.get_desired_trajectory()
+        tXUd = th.TsFO_to_tXU(Tsd,FOd,m,kt,fex)
 
         # =====================================================================
         # Setup Acados Variables
@@ -158,12 +158,11 @@ class VehicleRateMPC(BaseController):
         # Controller Specific Variables
         self.Nx,self.Nu = nx,nu
         self.Tsd,self.FOd = Tsd,FOd
-        self.tXUd,self.Fex = tXUd,Fex
+        self.tXUd,self.fex = tXUd,fex
         self.p = p
         self.Qk,self.Rk,self.QN = Qk,Rk,QN
         self.lbu,self.ubu = lbu,ubu
         self.Ws = Ws
-        self.ns = ns
         self.use_RTI = use_RTI
         self.solver = solver
 
@@ -182,9 +181,9 @@ class VehicleRateMPC(BaseController):
             - frame: Config Dict of the (drone) frame.
 
         """
-        m,kt = frame["mass"],frame["motor_thrust_coeff"]
         
-        tXUd = th.TsFO_to_tXU(self.Tsd,self.FOd,m,kt,self.Fex)
+        m,kt = frame["mass"],frame["motor_thrust_coeff"]
+        tXUd = th.TsFO_to_tXU(self.Tsd,self.FOd,m,kt,self.fex)
 
         self.p[0],self.p[1] = m,kt
         self.tXUd = tXUd
@@ -225,7 +224,7 @@ class VehicleRateMPC(BaseController):
         ydes = self.get_ydes(tcr,xcr)
 
         # Get external forces
-        self.p[2:5] = self.Fex.get_forces(xcr[0:6])
+        self.p[2:5] = self.fex.get_forces(xcr[0:6])
 
         # Set desired trajectory
         for i in range(self.solver.acados_ocp.dims.N):
@@ -267,32 +266,6 @@ class VehicleRateMPC(BaseController):
 
         return ucc,None,tsol
 
-    def pad_trajectory(self,WPs:dict,Nhn:int,hz_ctl:float) -> dict:
-        """
-        Method to pad the trajectory with the final waypoint so that the MPC horizon is satisfied at the end of the trajectory.
-
-        Args:
-            - WPs:   Dictionary containing the flat output waypoints.
-            - Nhn:        Prediction horizon.
-            - hz_ctl:     Controller frequency.
-
-        Returns:
-            - WPs_pd: Padded flat output waypoints.
-
-        """
-
-        # Get final waypoint
-        kff = list(WPs["keyframes"])[-1]
-        
-        # Pad trajectory
-        t_pd = WPs["keyframes"][kff]["t"]+(Nhn/hz_ctl)
-        fo_pd = np.array(WPs["keyframes"][kff]["fo"])[:,0:3].tolist()
-
-        WPs_pd = deepcopy(WPs)
-        WPs_pd["keyframes"]["fof"] = {"t":t_pd,"fo":fo_pd}
-
-        return WPs_pd
-
     def get_ydes(self,tcr:float,xcr:np.ndarray) -> np.ndarray:
         """
         Method to get the section of the desired trajectory at the current time.
@@ -305,25 +278,32 @@ class VehicleRateMPC(BaseController):
             - ydes:   Desired trajectory section at the current time.
 
         """
-        # Get relevant portion of trajectory
-        idx_i = int(self.hz*tcr)
-        Nhn_lim = self.tXUd.shape[1]-self.solver.acados_ocp.dims.N-1
-        ks0 = np.clip(idx_i-self.ns,0,Nhn_lim-1)
-        ksf = np.clip(idx_i+self.ns,0,Nhn_lim)
-        Xi = self.tXUd[1:11,ks0:ksf]
+
+        # Unpack some stuff
+        hz,ns = self.hz,int(self.hz)
+        tXUd = self.tXUd
+        Ndes = tXUd.shape[1]
+        Ws = self.Ws
+
+        # Use time to get estimated index and section out the search space
+        idx_est = int(hz*tcr)
+        ks0,ksf = idx_est-ns,idx_est+ns
+        ks0,ksf = np.clip(ks0,0,Ndes-1),np.clip(ksf,0,Ndes)
         
-        # Find index of nearest state
+        Xi = tXUd[1:11,ks0:ksf]
+        
+        # Find the closest point in the search space (weighted)
         dXi = Xi-xcr.reshape(-1,1)
-        wl2_dXi = np.array([x.T@self.Ws@x for x in dXi.T])
-        idx0 = ks0 + np.argmin(wl2_dXi)
+        J_dXi = np.array([x.T@Ws@x for x in dXi.T])
+        idx0 = ks0 + np.argmin(J_dXi)
         idxf = idx0 + self.solver.acados_ocp.dims.N+1
 
         # Pad if idxf is greater than the last index
-        if idxf < self.tXUd.shape[1]:
-            ydes = self.tXUd[1:,idx0:idxf]
+        if idxf < Ndes:
+            ydes = tXUd[1:,idx0:idxf]
         else:
-            print("Warning: VehicleRateMPC.get_ydes() padding trajectory. Increase your padding horizon.")
-            ydes = self.tXUd[1:,idx0:]
-            ydes = np.hstack((ydes,np.tile(ydes[:,-1:],(1,idxf-self.tXUd.shape[1]))))
-
+            ydes = tXUd[1:,idx0:]
+            ypad = np.tile(ydes[:,-1:],(1,idxf-tXUd.shape[1]))
+            ydes = np.hstack((ydes,ypad))
+            
         return ydes
