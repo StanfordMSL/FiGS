@@ -222,7 +222,7 @@ class VehicleRateMPC(BaseController):
 
         # Get desired trajectory
         ydes = self.get_ydes(tcr,xcr)
-
+        
         # Get external forces
         self.p[2:5] = self.fex.get_forces(xcr[0:6])
 

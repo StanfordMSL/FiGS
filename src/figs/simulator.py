@@ -96,7 +96,7 @@ class Simulator:
         # Load configs
         Rout = self.conFiG["rollout"]
         Spec = qs.generate_specifications(self.conFiG["frame"])
-        Fext = ExternalForces(self.conFiG["forces"])
+        fex = ExternalForces(self.conFiG["forces"])
 
         # Drone Variables
         nx,nu = Spec["nx"],Spec["nu"]
@@ -188,7 +188,7 @@ class Simulator:
             ucr = udl[:,0] if i%n_sim2ctl < n_delay else udl[:,1]
 
             # Add external forces
-            ufe = Fext.get_forces(xcr[0:6], noisy=True)
+            ufe = fex.get_forces(xcr[0:6], noisy=True)
             pcr = np.hstack((m,kt,ufe))
 
             # Simulate both estimated and actual states

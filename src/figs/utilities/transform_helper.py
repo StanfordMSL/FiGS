@@ -4,6 +4,7 @@ Helper functions for transforms.
 
 import numpy as np
 import figs.utilities.polynomial_helper as ph
+import figs.utilities.orientation_helper as oh
 
 from scipy.spatial.transform import Rotation
 from figs.dynamics.external_forces import ExternalForces
@@ -185,6 +186,12 @@ def TsFO_to_tXU(Ts:np.ndarray,FO:np.ndarray,
 
         # Compute state vector and control input
         xu = fo_to_xu(FO[k,:,:],m,kt,fk,n_mtr)
+
+        if k == 0:
+            qp = xu[6:10]
+        else:
+            xu[6:10] = oh.obedient_quaternion(xu[6:10],qp)
+            qp = xu[6:10]
 
         # Store in output variable
         tXU[0,k] = Ts[k]
