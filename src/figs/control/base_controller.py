@@ -37,7 +37,7 @@ class BaseController(ABC):
         # Necessary attributes
         self.name:str = None
         self.hz:int = None
-        self.Nznn:Dict[str,List[torch.Tensor]] = None
+        self.znn_cr = None
         self.nhy:int = None
 
     @abstractmethod
