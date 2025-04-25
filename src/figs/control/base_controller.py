@@ -4,7 +4,7 @@ import json
 
 from pathlib import Path
 from abc import ABC, abstractmethod
-from typing import Dict,Union,Tuple,List
+from typing import Union,Tuple
 
 class BaseController(ABC):
     """
@@ -37,16 +37,16 @@ class BaseController(ABC):
         # Necessary attributes
         self.name:str = None
         self.hz:int = None
-        self.znn_cr = None
+        self.zcr = None
         self.nhy:int = None
 
     @abstractmethod
     def control(self, tcr: float, xcr: np.ndarray,
-                upr: Union[None, np.ndarray],
-                obj: Union[None, np.ndarray],
-                icr: Union[None, np.ndarray],
-                zcr: Union[None, torch.Tensor]
-                ) -> Tuple[np.ndarray, Union[None, torch.Tensor], Union[None, np.ndarray], np.ndarray]:
+                upr: None|np.ndarray,
+                obj: None|np.ndarray,
+                icr: None|np.ndarray,
+                zcr: None|torch.Tensor
+                ) -> tuple[np.ndarray, None|torch.Tensor, None|np.ndarray, np.ndarray]:
         """
         Abstract control method to be implemented by subclasses.
 
