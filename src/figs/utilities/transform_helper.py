@@ -94,7 +94,6 @@ def x_to_fo(x:np.ndarray,Nfo:int=4,Ndr:int=5) -> np.ndarray:
         fo:     Flat outputs.
     """
 
-
     # Initialize output
     fo = np.full((Nfo,Ndr),np.nan)
 
@@ -108,6 +107,115 @@ def x_to_fo(x:np.ndarray,Nfo:int=4,Ndr:int=5) -> np.ndarray:
     fo[3,0]  = psi
 
     return fo
+
+def xu_to_fo(xu:np.ndarray,fext:np.ndarray,
+             frame:dict[str,np.ndarray,str|int|float],
+             Nfo:int=4,Ndr:int=5) -> np.ndarray:
+    """
+    Converts a state vector to flat output vector.
+
+    Args:
+        xu:     State vector
+        fext:   External forces vector.
+        frame:  Frame configuration.
+        Ndr:    Number of derivatives.
+        Nfo:    Number of flat outputs.
+
+    Returns:
+        fo:     Flat outputs.
+    """
+
+    # Some useful intermediate variables
+    g = np.array([0,0,9.81])                # Gravity vector
+    zb = np.array([0.0,0.0,1.0])            # Z-axis unit vector
+    n_mtr = frame["number_of_rotors"]       # Number of motors
+    m_fr = frame["mass"]                    # Frame mass
+    k_fr = frame["motor_thrust_coeff"]      # Frame thrust coefficient
+    
+    Rb2w = Rotation.from_quat(xu[6:10]).as_matrix() # Rotation matrix (body to world)
+    fthr = Rb2w@(xu[10]*n_mtr*k_fr*zb)      # Thrust vector
+
+    # Compute flat output terms
+    pos = xu[0:3]
+    vel = xu[3:6]
+    acc = g + (1/m_fr)*(fthr+fext)
+
+    psi = np.arctan2(Rb2w[1,0], Rb2w[0,0])
+    psi_dot = zb.T@Rb2w.T@xu[11:14]
+
+    # Initialize output
+    fo = np.full((Nfo,Ndr),np.nan)
+
+    # Compute linear terms
+    fo[0:3,0] = pos
+    fo[0:3,1] = vel
+    fo[0:3,2] = acc
+    fo[3,0]  = psi
+    fo[3,1]  = psi_dot
+    
+    return fo
+
+def tXU_to_TsFO(tXU:np.ndarray,Fext:np.ndarray,
+             frame:dict[str,np.ndarray,str|int|float],
+             Nfo:int=4,Ndr:int=5) -> np.ndarray:
+    """
+    Converts a state/input seqeunce to a flat output sequence.
+
+    Args:
+        tXU:    State/Input vector (timed)
+        Fext:   External forces vector.
+        frame:  Frame configuration.
+        Ndr:    Number of derivatives.
+        Nfo:    Number of flat outputs.
+
+    Returns:
+        fo:     Flat outputs.
+    """
+
+    # Some useful intermediate variables
+    g = np.array([0,0,9.81])                # Gravity vector
+    zb = np.array([0.0,0.0,1.0])            # Z-axis unit vector
+    n_mtr = frame["number_of_rotors"]       # Number of motors
+    m_fr = frame["mass"]                    # Frame mass
+    k_fr = frame["motor_thrust_coeff"]      # Frame thrust coefficient
+    Nro = tXU.shape[1]                      # Number of time steps
+
+    # Initialize output variable
+    Ts = np.zeros(Nro)
+    FO = np.zeros((Nro,Nfo,Ndr))
+
+    for i in range(Nro):
+        Rb2w = Rotation.from_quat(tXU[7:11,i]).as_matrix() # Rotation matrix (body to world)
+        fthr = Rb2w@(tXU[11,i]*n_mtr*k_fr*zb)      # Thrust vector
+
+        # Compute flat output terms
+        pos = tXU[1:4,i]
+        vel = tXU[4:7,i]
+        acc = g + (1/m_fr)*(fthr+Fext[:,i])
+
+        psi = np.arctan2(Rb2w[1,0], Rb2w[0,0])
+        psi_dot = zb.T@Rb2w.T@tXU[12:15,i]
+
+        # Wrap around
+        if i == 0:
+            psi_p = psi
+        else:
+            if np.abs(psi-psi_p) > np.pi:
+                if psi > 0:
+                    psi = psi - 2*np.pi
+                else:
+                    psi = psi + 2*np.pi
+            psi_p = psi
+            
+        # Pack terms
+        Ts[i] = tXU[0,i]
+        FO[i,0:3,0] = pos
+        FO[i,0:3,1] = vel
+        FO[i,0:3,2] = acc
+        FO[i,3,0]  = psi
+        FO[i,3,1]  = psi_dot
+    
+    return Ts,FO
 
 def TpCP_to_TsFO(Tp:np.ndarray,CP:np.ndarray,
                  hz:int=20,Nfo:int=4,Ndr:int=4) -> tuple[np.ndarray,np.ndarray]:
