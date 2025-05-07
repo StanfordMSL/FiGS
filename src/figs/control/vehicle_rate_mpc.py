@@ -188,6 +188,24 @@ class VehicleRateMPC(BaseController):
         self.p[0],self.p[1] = m,kt
         self.tXUd = tXUd
 
+    def set_initial_memory(self,x0:np.ndarray,u0:np.ndarray|None=None) -> None:
+        """
+        Method to set the initial memory of the controller.
+
+        Args:
+            - x0: Initial state.
+            - u0: Initial control input (unused).
+
+        """
+        
+        # Educated guess for hover
+        if u0 is None:
+            u0 = np.array([-0.4,0.0,0.0,0.0])  
+
+        # Set initial parameter values
+        self.solver.set(0, "x", x0)
+        self.solver.set(0, "u", u0)
+        
     def control(self,
                 tcr:float,xcr:np.ndarray,
                 upr:np.ndarray=None,

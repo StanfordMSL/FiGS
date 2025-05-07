@@ -78,7 +78,7 @@ class GSplat():
 
         Returns:
             - image_rgb: Rendered RGB image.
-
+            - image_dpt: Rendered depth image.
         """
 
         # Extract the camera to gsplat pose
@@ -88,10 +88,15 @@ class GSplat():
         # Render rgb image from the pose
         camera.camera_to_worlds = Pc2g[None,:3, ...]
         with torch.no_grad():
-            image_rgb = self.pipeline.model.get_outputs_for_camera(camera, obb_box=None)["rgb"]
-
+            image = self.pipeline.model.get_outputs_for_camera(camera,obb_box=None)
+            image_rgb = image["rgb"]
+            image_dpt = image["depth"]
+        
         # Convert to output image
         image_rgb = image_rgb.cpu().numpy()             # Convert to numpy
         image_rgb = (255*image_rgb).astype(np.uint8)    # Convert to uint8
 
-        return image_rgb
+        image_dpt = image_dpt.cpu().numpy()             # Convert to numpy
+        image_dpt = (255*image_dpt).astype(np.uint8)    # Convert to uint8
+
+        return image_rgb, image_dpt

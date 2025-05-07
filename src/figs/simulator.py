@@ -153,7 +153,7 @@ class Simulator:
 
         # Trajectory Rollout Variables
         Tro,Xro,Uro = np.zeros(Nctl+1),np.zeros((nx,Nctl+1)),np.zeros((nu,Nctl))
-        Iro = np.zeros((Nctl,height,width,channels),dtype=np.uint8)
+        Iro,Dro = np.zeros((Nctl,height,width,channels),dtype=np.uint8),np.zeros((Nctl,height,width,1),dtype=np.uint8)
         Xro[:,0] = x0
         Fro = np.zeros((3,Nctl))
 
@@ -167,7 +167,7 @@ class Simulator:
                 # Get current image
                 Tb2w = th.x_to_T(xcr)
                 Tc2w = Tb2w@Tc2b
-                icr = self.gsplat.render_rgb(camera,Tc2w)
+                icr,dcr = self.gsplat.render_rgb(camera,Tc2w)
 
                 # Add sensor noise and syncronize estimated state
                 if use_fusion:
@@ -208,6 +208,7 @@ class Simulator:
                 k = i//n_sim2ctl
 
                 Iro[k,:,:,:] = icr
+                Dro[k,:,:,:] = dcr
                 Tro[k] = tcr
                 Xro[:,k+1] = xcr
                 Uro[:,k] = ucm
@@ -217,4 +218,4 @@ class Simulator:
         # Log final time
         Tro[Nctl] = t0+Nsim/hz_sim
 
-        return Tro,Xro,Uro,Iro,Fro,Tsol
+        return Tro,Xro,Uro,Iro,Dro,Fro,Tsol

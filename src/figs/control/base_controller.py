@@ -4,7 +4,6 @@ import json
 
 from pathlib import Path
 from abc import ABC, abstractmethod
-from typing import Union,Tuple
 
 class BaseController(ABC):
     """
@@ -41,28 +40,29 @@ class BaseController(ABC):
         self.nhy:int = None
 
     @abstractmethod
-    def control(self, tcr: float, xcr: np.ndarray,
-                upr: None|np.ndarray,
-                obj: None|np.ndarray,
-                icr: None|np.ndarray,
-                zcr: None|torch.Tensor
-                ) -> tuple[np.ndarray, None|torch.Tensor, None|np.ndarray, np.ndarray]:
+    def set_initial_memory(self, x0: np.ndarray, u0:np.ndarray|None=None) -> None:
+        """
+        Set the initial memory of the controller.
+
+        Args:
+            x0: Initial state vector.
+            u0: Initial control input vector (if any, None otherwise).
+
+        """
+        pass
+    
+    @abstractmethod
+    def control(self, scr:dict[str,np.ndarray], zcr:dict[str,torch.Tensor]={}) -> tuple[np.ndarray, None|torch.Tensor, None|np.ndarray, np.ndarray]:
         """
         Abstract control method to be implemented by subclasses.
 
         Args:
-            tcr: Time at the current control step.
-            xcr: States at the current control step.
-            upr: Previous control step inputs (if any, None otherwise).
-            obj: Objective vector (if any, None otherwise).
-            icr: Image at the current control step (if any, None otherwise).
-            zcr: Feature vector at current control step (if any, None otherwise).
+            scr:    Dictionary containing the current sensor data.
+            zcr:    Dictionary containing the current output feature vector (empty otherwise).
 
         Returns:
-            ucr: Control input.
-            zcr: Output feature vector (if any, None otherwise).
-            adv: Advisor output (if any, None otherwise).
-            tsol: Time taken to solve components.
-
+            ucr:    Control input.
+            zcr:    Output feature vector (if any, None otherwise).
+            aux:    Auxiliary outputs.
         """
         pass
