@@ -73,6 +73,7 @@ class MinSnap():
         # Solve QP to get coefficient solution (spline variables)
         x = qpsolvers.solve_qp(P,q=None,G=None,h=None,A=A,b=b,solver="osqp")
         Pn = x.reshape((Nfo,Nsm,-1))
+        Pn = np.transpose(Pn,(1,0,2))
 
         return dT,Pn
     

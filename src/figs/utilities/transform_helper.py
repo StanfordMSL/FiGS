@@ -178,23 +178,23 @@ def tXU_to_TsFO(tXU:np.ndarray,Fext:np.ndarray,
     n_mtr = frame["number_of_rotors"]       # Number of motors
     m_fr = frame["mass"]                    # Frame mass
     k_fr = frame["motor_thrust_coeff"]      # Frame thrust coefficient
-    Nro = tXU.shape[1]                      # Number of time steps
+    Nro = tXU.shape[0]                      # Number of time steps
 
     # Initialize output variable
     Ts = np.zeros(Nro)
     FO = np.zeros((Nro,Nfo,Ndr))
 
     for i in range(Nro):
-        Rb2w = Rotation.from_quat(tXU[7:11,i]).as_matrix() # Rotation matrix (body to world)
-        fthr = Rb2w@(tXU[11,i]*n_mtr*k_fr*zb)      # Thrust vector
+        Rb2w = Rotation.from_quat(tXU[i,7:11]).as_matrix() # Rotation matrix (body to world)
+        fthr = Rb2w@(tXU[i,11]*n_mtr*k_fr*zb)      # Thrust vector
 
         # Compute flat output terms
-        pos = tXU[1:4,i]
-        vel = tXU[4:7,i]
-        acc = g + (1/m_fr)*(fthr+Fext[:,i])
+        pos = tXU[i,1:4]
+        vel = tXU[i,4:7]
+        acc = g + (1/m_fr)*(fthr+Fext[i,:])
 
         psi = np.arctan2(Rb2w[1,0], Rb2w[0,0])
-        psi_dot = zb.T@Rb2w.T@tXU[12:15,i]
+        psi_dot = zb.T@Rb2w.T@tXU[i,12:15]
 
         # Wrap around
         if i == 0:
@@ -208,7 +208,7 @@ def tXU_to_TsFO(tXU:np.ndarray,Fext:np.ndarray,
             psi_p = psi
             
         # Pack terms
-        Ts[i] = tXU[0,i]
+        Ts[i] = tXU[i,0]
         FO[i,0:3,0] = pos
         FO[i,0:3,1] = vel
         FO[i,0:3,2] = acc
@@ -281,7 +281,7 @@ def TsFO_to_tXU(Ts:np.ndarray,FO:np.ndarray,
     
     # Initialize output variables
     N = FO.shape[0]
-    tXU = np.zeros((ndim,N))
+    tXU = np.zeros((N,ndim))
 
     # Compute flat outputs
     for k in range(N):
@@ -302,8 +302,8 @@ def TsFO_to_tXU(Ts:np.ndarray,FO:np.ndarray,
             qp = xu[6:10]
 
         # Store in output variable
-        tXU[0,k] = Ts[k]
-        tXU[1:,k] = xu
+        tXU[k,0] = Ts[k]
+        tXU[k,1:] = xu
 
     return tXU
 
@@ -406,7 +406,7 @@ def dTPn_to_FO(Ts:np.ndarray,dT:np.ndarray,Pn:np.ndarray,Ndr:int=4) -> tuple[np.
     """
 
     # Get some useful constants
-    Nfo,_,Nco = Pn.shape
+    _,Nfo,Nco = Pn.shape
     Nt = len(Ts)
 
     # Initialize output variable
@@ -418,7 +418,7 @@ def dTPn_to_FO(Ts:np.ndarray,dT:np.ndarray,Pn:np.ndarray,Ndr:int=4) -> tuple[np.
 
         Ai = ph.generate_As([tsm],dt,Nco,Ndr)[0]
         for j in range(Nfo):
-            FO[i,j,:] = Ai@Pn[j,idx,:]
+            FO[i,j,:] = Ai@Pn[idx,j,:]
 
     return FO
 

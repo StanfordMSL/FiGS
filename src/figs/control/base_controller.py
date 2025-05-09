@@ -14,10 +14,10 @@ class BaseController(ABC):
     
     Attributes:
         configs_path:   Path to the directory containing the JSON files.
+        name:           Name of the controller.
         hz:             Frequency of the controller.
-        Nznn:           Number of states in the controller.
-        nhy:            History sequence length.
-
+        Nhy:            History sequence length.
+        Nhn:            Horizon sequence length.
     """
     def __init__(self,configs_path:Path=None) -> None:
         """
@@ -27,42 +27,29 @@ class BaseController(ABC):
             configs_path: Path to the directory containing the JSON files.
 
         """
-        # Set the configuration directory
-        if configs_path is None:
-            self.configs_path = Path(__file__).parent.parent.parent.parent.parent/'configs'
-        else:
-            self.configs_path = configs_path
 
         # Necessary attributes
-        self.name:str = None
-        self.hz:int = None
-        self.zcr = None
-        self.nhy:int = None
-
-    @abstractmethod
-    def set_initial_memory(self, x0: np.ndarray, u0:np.ndarray|None=None) -> None:
-        """
-        Set the initial memory of the controller.
-
-        Args:
-            x0: Initial state vector.
-            u0: Initial control input vector (if any, None otherwise).
-
-        """
-        pass
+        self.name:str = None                # Name of the controller
+        self.hz:int = None                  # Frequency of the controller
     
     @abstractmethod
-    def control(self, scr:dict[str,np.ndarray], zcr:dict[str,torch.Tensor]={}) -> tuple[np.ndarray, None|torch.Tensor, None|np.ndarray, np.ndarray]:
+    def control(self,tcr:float,xcr:np.ndarray,upr:np.ndarray,
+                rgb:np.ndarray,dpt:np.ndarray,
+                fcr:np.ndarray
+    ) -> tuple[np.ndarray, dict[str,np.ndarray|torch.Tensor]]:
         """
         Abstract control method to be implemented by subclasses.
 
         Args:
-            scr:    Dictionary containing the current sensor data.
-            zcr:    Dictionary containing the current output feature vector (empty otherwise).
+            tcr: Current time.
+            xcr: Current state.
+            upr: Previous control input.
+            rgb: RGB image.
+            dpt: Depth image.
+            fcr: Current force.
 
         Returns:
-            ucr:    Control input.
-            zcr:    Output feature vector (if any, None otherwise).
-            aux:    Auxiliary outputs.
+            ucr: Controller output.
+            aux: Auxiliary outputs.
         """
         pass

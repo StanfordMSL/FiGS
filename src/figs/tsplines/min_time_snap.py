@@ -98,6 +98,7 @@ class MinTimeSnap():
         # Package Results
         x = self.solve_uqp(dT,FOkf)[0]
         Pn = x.reshape((Nfo,Nsm,-1))
+        Pn = np.transpose(Pn,(1,0,2))
 
         return dT,Pn
     

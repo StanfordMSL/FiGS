@@ -24,7 +24,7 @@ def generate_gsplat(scene_file_name:str,capture_cfg_name:str='default',
     if config_path is None:
         config_path = Path(__file__).parent.parent.parent.parent.parent/'configs'
 
-    capture_cfg_path = config_path/'capture'
+    capture_cfg_path = config_path/'captures'
     capture_path = gsplats_path/'capture'
     workspace_path = gsplats_path/'workspace'
     
@@ -81,10 +81,6 @@ def generate_gsplat(scene_file_name:str,capture_cfg_name:str='default',
     
     sparse_pcloud = o3d.io.read_point_cloud(sfm_spc_path.as_posix())
     
-    # Check if frame count matches
-    if len(tfm_data["frames"]) != extractor_config["num_images"]:
-        raise ValueError(f"Frame count mismatch: {len(tfm_data['frames'])} frames in SfM data despite. Expected {len(extractor_config['num_images'])} images.")
-
     # Use sfm config if camera config is not provided
     if camera_config is None:
         fx,fy = tfm_data["fl_x"],tfm_data["fl_y"]

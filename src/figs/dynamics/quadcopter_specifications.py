@@ -16,40 +16,45 @@ def generate_specifications(
         nx:             Number of states in the system.
         nu:             Number of inputs in the system.
 
-    Variable Constants:
-        - m: Mass of the quadcopter (kg)
-        - Impp: Massless Inertia tensor of the quadcopter (m^2)
-        - lf: [x,y] distance from the center of mass to the front motors
-        - lb: [x,y] distance from the center of mass to the back motors
-        - fn: Normalized motor force gain
-        - tG: Motor torque gain (after normalizing by fn)
+    Variable Inputs:
+        - mass: Mass of the quadcopter
+        - massless_inertia: Inertia of the quadcopter without mass
+        - arm_front: Length of the front arm
+        - arm_back: Length of the back arm
+        - motor_thrust_coeff: Coefficient for thrust
+        - motor_torque_coeff: Coefficient for torque
+        - number_of_rotors: Number of rotors
+        - camera_to_body_transform: Transformation matrix from camera to body
+        - camera: Camera specifications (fx, fy, cx, cy)
+        - camera["fx"]: Focal length in x direction
+        - camera["fy"]: Focal length in y direction
+        - camera["cx"]: Optical center in x direction
+        - camera["cy"]: Optical center in y direction
+        - camera["height"]: Height of the camera
+        - camera["width"]: Width of the camera
+        - camera["channels"]: Number of channels in the camera
     
-    Fixed Constants:
-        - nx_fs: Number of states for the full state model
-        - nu_fs: Number of inputs for the full state model
-        - nx_br: Number of states for the body rate model
-        - nu_br: Number of inputs for the body rate model
-        - nu_va: Number of inputs for the vehicle attitude model
-        - n_mtr: Number of motors
-        - lbu: Lower bound on the inputs
-        - ubu: Upper bound on the inputs
-        - tf: Time horizon for the MPC
-        - hz: Frequency of the MPC
-        - Qk: Stagewise State weight matrix for the MPC
-        - Rk: Stagewise Input weight matrix for the MPC
-        - QN: Terminal State weight matrix for the MPC
-        - Ws: Search weights for the MPC (to get xv_ds)
-
-    Derived Constants:
-        - Iinv: Inverse of the inertia tensor
-        - fMw: Matrix to convert from forces to moments
-        - wMf: Matrix to convert from moments to forces
-        - tn: Total normalized thrust
-
-    Misc:
+    Drone Specifications:
+        - m: Mass of the quadcopter
+        - I: Inertia matrix of the quadcopter
+        - lf: Length of the front arm
+        - lb: Length of the back arm
+        - kt: Thrust coefficient
+        - kq: Torque coefficient
+        - g: Gravitational acceleration
+        - nx: Number of states in the system
+        - nu: Number of inputs in the system
+        - Nrtr: Number of rotors
+        - Tc2b: Transformation matrix from camera to body
+        - K: Camera intrinsic matrix
+        - camera: Camera specifications (height, width, channels, fx, fy, cx, cy)
+        - rgb_dim: Dimensions of the RGB image
+        - dpt_dim: Dimensions of the depth image
+        - Iinv: Inverse inertia matrix of the quadcopter
+        - fMw: Force to motor weight matrix
+        - wMf: Motor to force weight matrix
+        - kt_sum: Total thrust coefficient
         - name: Name of the quadcopter
-
-    The default values are for the Iris used in the Gazebo SITL simulation.
     
     """
 
@@ -62,6 +67,7 @@ def generate_specifications(
     camera = drn_prms["camera"]
     fx,fy = camera["fx"], camera["fy"]
     cx,cy = camera["cx"], camera["cy"]
+    height,width,channels = camera["height"], camera["width"], camera["channels"]
 
     # Initialize the dictionary
     quad = {}
@@ -73,7 +79,8 @@ def generate_specifications(
     quad["lf"] = np.array(lf)
     quad["lb"] = np.array(lb)
     quad["kt"],quad["kq"] = kt, kq
-
+    quad["g"] = 9.81
+    
     # Model Constants
     quad["nx"],quad["nu"] = nx,nu
     quad["Nrtr"] = Nrtr
@@ -85,6 +92,8 @@ def generate_specifications(
     ])
 
     quad["camera"] = camera
+    quad["rgb_dim"] = (height,width,channels)
+    quad["dpt_dim"] = (height,width,1)
 
     # Derive Quadcopter Constants
     fMw = kt*np.array([

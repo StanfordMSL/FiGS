@@ -1,7 +1,7 @@
 import os
 import shutil
-import torch
 import numpy as np
+import figs.utilities.config_helper as ch
 import figs.utilities.transform_helper as th
 import figs.utilities.orientation_helper as oh
 import figs.dynamics.quadcopter_model as qm
@@ -17,7 +17,7 @@ class Simulator:
     Class to simulation in FiGS
     """
 
-    def __init__(self,gsplat:GSplat,rollout:dict,frame:None|dict=None,forces:None|dict=None) -> None:
+    def __init__(self,gsplat:str|GSplat,method:str|dict,frame:None|str|dict=None,forces:None|dict=None) -> None:
         """
         The FiGS simulator simulates flying in a Gaussian Splat by using an ACADOS integrator
         (solver) to rollout a trajectory in a Gaussian Splat (gsplat) in the presence of a set
@@ -25,16 +25,29 @@ class Simulator:
         configuration (conFiG).
 
         Args:
-            - gsplat:      GSplat.
-            - rollout:     Rollout config.
-            - frame:       Frame config (None if not instantiating with a frame).
-            - forces:      Forces config (None if no external forces).
+            - gsplat:   GSplat.
+            - method:   Method config.
+            - frame:    Frame config (None if not instantiating with a frame).
+            - forces:   Forces config (None if no external forces).
 
         Attributes:
-            - gsplat:           Gaussian Splat of the scene.
-            - conFiG:           Dictionary holding simulation configurations.
-            - solver:           An ACADOS integrator for the drone dynamics.
+            - gsplat:   Gaussian Splat of the scene.
+            - conFiG:   Dictionary holding simulation configurations.
+            - solver:   An ACADOS integrator for the drone dynamics.
         """
+
+        # Check if gsplat is a string or GSplat object
+        if isinstance(gsplat, str):
+            gsplat = ch.get_gsplat(gsplat)
+        
+        # Check if rollout is a string or dictionary
+        if isinstance(method, str):
+            method = ch.get_config(method, "methods")
+        rollout = method["rollout"]
+
+        # Check if frame is a string or dictionary
+        if isinstance(frame, str):
+            frame = ch.get_config(frame, "frames")
 
         # Instantiate the dynamics solver
         sim_json = 'figs_sim_solver.json'
@@ -58,13 +71,16 @@ class Simulator:
         os.remove(os.path.join(os.getcwd(),sim_json))
         shutil.rmtree(sim.code_export_directory)
 
-    def update_frame(self, frame_config:dict):
+    def update_frame(self, frame_config:str|dict):
         """
         Loads/Updates the conFiG attribute given a rollout name.
 
         Args:
             - frame_config: Configuration dictionary.
         """
+        # Check if frame_config is a string or dictionary
+        if isinstance(frame_config, str):
+            frame_config = ch.get_config(frame_config, "frames")
 
         # Update attribute(s)
         self.conFiG["frame"] = frame_config
@@ -81,8 +97,8 @@ class Simulator:
         self.conFiG["forces"] = forces_config
 
     def simulate(self,policy:BaseController,
-                 t0:float,tf:int,x0:np.ndarray,obj:None|np.ndarray=None
-                 ) -> tuple[np.ndarray,np.ndarray,np.ndarray,np.ndarray,np.ndarray,np.ndarray]:
+                 t0:float,tf:int,x0:np.ndarray
+                 ) -> tuple[np.ndarray,np.ndarray,np.ndarray,np.ndarray,np.ndarray,np.ndarray,list[dict]]:
         """
         Simulates the flight.
 
@@ -101,14 +117,13 @@ class Simulator:
         # Drone Variables
         nx,nu = Spec["nx"],Spec["nu"]
         m,kt = Spec["m"],Spec["kt"]
+        g,Nrtr = Spec["g"],Spec["Nrtr"]
         Tc2b = Spec["Tc2b"]
-        height,width = Spec["camera"]["height"],Spec["camera"]["width"]
-        channels = Spec["camera"]["channels"]
+        rgb_dim,dpt_dim = Spec["rgb_dim"],Spec["dpt_dim"]
         camera = self.gsplat.generate_output_camera(Spec["camera"])
 
         # Base Rollout Variables
         hz_sim = Rout["frequency"]
-        t_dly = Rout["delay"]
         
         # Noise Rollout Variables
         model_noise = Rout["noise"]["model"]
@@ -126,96 +141,65 @@ class Simulator:
             mu_sn = np.array(sensor_noise["mean"])
             std_sn = np.array(sensor_noise["std"])
 
-        # Fusion Rollout Variables
-        fuse_con = Rout["fusion"]
-
-        use_fusion = False if fuse_con is None else True
-        Wf_md = np.diag(fuse_con) if fuse_con else np.eye(nx)
-        Wf_sn = np.eye(nx)-Wf_md
-        
         # Derived Variables
         n_sim2ctl = int(hz_sim/policy.hz)       # Number of simulation steps per control step
         mu_md = mu_md_s*(1/n_sim2ctl)           # Scale model mean noise to control rate
         std_md = std_md_s*(1/n_sim2ctl)         # Scale model std noise to control rate
-        dt = np.round(tf-t0)                    # Total time
+        dt = tf-t0                    # Total time
         Nsim = int(dt*hz_sim)                   # Number of simulation steps
         Nctl = int(dt*policy.hz)                # Number of control steps
-        n_delay = int(t_dly*hz_sim)             # Number of steps for input delay
-
-        # Diagnostics Variables
-        Tsol = np.zeros((4,Nctl))
         
+        # Trajectory Rollout Variables
+        Tro,Xro,Uro = np.zeros((Nctl+1)),np.zeros((Nctl+1,nx)),np.zeros((Nctl,nu))
+        Fro = np.zeros((Nctl,3))
+        Rgb = np.zeros(((Nctl,) + rgb_dim),dtype=np.uint8)
+        Dpt = np.zeros(((Nctl,) + dpt_dim),dtype=np.uint8)
+        Aux = []
+
         # Transient Variables
         xcr,xpr,xsn = x0.copy(),x0.copy(),x0.copy()
-        ucm = np.array([-m/kt,0.0,0.0,0.0])
-        udl = np.hstack((ucm.reshape(-1,1),ucm.reshape(-1,1)))
-        zcr = policy.zcr
+        ucr = np.array([-(m*g)/(Nrtr*kt),0.0,0.0,0.0])
 
-        # Trajectory Rollout Variables
-        Tro,Xro,Uro = np.zeros(Nctl+1),np.zeros((nx,Nctl+1)),np.zeros((nu,Nctl))
-        Iro,Dro = np.zeros((Nctl,height,width,channels),dtype=np.uint8),np.zeros((Nctl,height,width,1),dtype=np.uint8)
-        Xro[:,0] = x0
-        Fro = np.zeros((3,Nctl))
-
-        # Rollout
+        # Rollout Loop
         for i in range(Nsim):
-            # Get current time and state
+            # Get current variables
             tcr = t0+i/hz_sim
+            fcr = fex.get_forces(xcr[0:6], noisy=True)
+            pcr = np.hstack((m,kt,fcr))
 
-            # Control
+            # Control Loop
             if i % n_sim2ctl == 0:
-                # Get current image
+                # Get current images
                 Tb2w = th.x_to_T(xcr)
                 Tc2w = Tb2w@Tc2b
-                icr,dcr = self.gsplat.render_rgb(camera,Tc2w)
+                rgb,dpt = self.gsplat.render_rgb(camera,Tc2w)
 
                 # Add sensor noise and syncronize estimated state
-                if use_fusion:
-                    xsn += np.random.normal(loc=mu_sn,scale=std_sn)
-                    xsn = Wf_sn@xsn + Wf_md@xcr
-                else:
-                    xsn = xcr + np.random.normal(loc=mu_sn,scale=std_sn)
+                xsn = xcr + np.random.normal(loc=mu_sn,scale=std_sn)
                 xsn[6:10] = oh.obedient_quaternion(xsn[6:10],xpr[6:10])
 
                 # Generate controller command
-                ucm,zcr,tsol = policy.control(tcr,xsn,ucm,obj,icr,zcr)
+                ucr,aux = policy.control(tcr,xsn,ucr,rgb,dpt,fcr)
 
-                # Update delay buffer
-                udl[:,0] = udl[:,1]
-                udl[:,1] = ucm
+                # Log data
+                k = i//n_sim2ctl
+                Tro[k],Xro[k,:],Uro[k,:] = tcr,xcr,ucr
+                Fro[k,:] = fcr
+                Rgb[k,:,:,:],Dpt[k,:,:,:] = rgb,dpt
+                Aux.append(aux)
 
-            # Extract delayed command
-            ucr = udl[:,0] if i%n_sim2ctl < n_delay else udl[:,1]
-
-            # Add external forces
-            ufe = fex.get_forces(xcr[0:6], noisy=True)
-            pcr = np.hstack((m,kt,ufe))
+            # Update previous state
+            xpr = xcr
 
             # Simulate both estimated and actual states
             xcr = self.solver.simulate(x=xcr,u=ucr,p=pcr)
-            if use_fusion:
-                xsn = self.solver.simulate(x=xsn,u=ucr,p=pcr)
 
             # Add model noise
             xcr = xcr + np.random.normal(loc=mu_md,scale=std_md)
             xcr[6:10] = oh.obedient_quaternion(xcr[6:10],xpr[6:10])
 
-            # Update previous state
-            xpr = xcr
-            
-            # Store values
-            if i % n_sim2ctl == 0:
-                k = i//n_sim2ctl
-
-                Iro[k,:,:,:] = icr
-                Dro[k,:,:,:] = dcr
-                Tro[k] = tcr
-                Xro[:,k+1] = xcr
-                Uro[:,k] = ucm
-                Fro[:,k] = ufe
-                Tsol[:,k] = tsol
-
-        # Log final time
+        # Log entry
         Tro[Nctl] = t0+Nsim/hz_sim
+        Xro[Nctl,:] = xcr
 
-        return Tro,Xro,Uro,Iro,Dro,Fro,Tsol
+        return Tro,Xro,Uro,Fro,Rgb,Dpt,Aux

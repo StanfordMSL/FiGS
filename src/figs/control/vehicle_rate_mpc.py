@@ -3,11 +3,11 @@ import shutil
 import os
 import numpy as np
 import scipy.linalg
+import figs.utilities.config_helper as ch
 import figs.utilities.transform_helper as th
 import figs.dynamics.quadcopter_model as qm
 
 from pathlib import Path
-from copy import deepcopy
 from casadi import vertcat
 from acados_template import AcadosOcp, AcadosOcpSolver
 from figs.control.base_controller import BaseController
@@ -16,11 +16,9 @@ from figs.tsplines.min_time_snap import MinTimeSnap
 
 class VehicleRateMPC(BaseController):
     def __init__(self,
-                 policy:dict,course:dict,frame:dict=None,
+                 policy:str|dict,course:str|dict,frame:str|dict=None,
                  use_RTI:bool=False,
-                 name:str="vrmpc",
-                 configs_path:Path=None,
-                 solver_json:str='figs_ocp_solver.json',) -> None:
+                 name:str="vrmpc") -> None:
         
         """
         Constructor for the VehicleRateMPC class.
@@ -31,45 +29,54 @@ class VehicleRateMPC(BaseController):
             - frame:        Config Dict of the (drone) frame.
             - use_RTI:      Use RTI flag.
             - name:         Name of the controller.
-            - configs_path: Path to the directory containing the JSON files.
-            - solver_json:  Name of the solver JSON file.
 
         Variables:
-            - hz:               Controller frequency.
-            - nzcr:             Feature vector size (if controller uses learned feedback. Set to None if not used).
-
-            - Nx:               Number of states.
-            - Nu:               Number of inputs.
-            - p:                Model Parameters. (mass,thrust,fx,fy,fz)
-            - Tpd:              Ideal TSpline time vector.
-            - CPd:              Ideal TSpline control points.
-            - tXUd:             Desired trajectory.
-            - fex:              External forces.
-            - Qk:               State cost.
-            - Rk:               Input cost.
-            - QN:               Final state cost.
-            - lbu:              Lower bound on inputs.
-            - ubu:              Upper bound on inputs.
-            - Ws:               Search cost.
-            - use_RTI:          Use RTI flag.
-            - model:            Model of the system.
-            - solver:           Solver object.
-            - code_export_path: Path to the generated code.
+            -  name:         Name of the controller.
+            -  hz:           Frequency of the controller.
+            -  Nx:          Number of states.
+            -  Nu:          Number of inputs.
+            -  Tsd:         Desired trajectory.
+            -  FOd:         Desired forces.
+            -  tXUd:        Desired trajectory in the state space.
+            -  fex:         External forces.
+            -  p:           Parameters of the model.
+            -  Qk:          State cost matrix.
+            -  Rk:          Input cost matrix.
+            -  QN:          Terminal cost matrix.
+            -  lbu:         Lower bounds on the inputs.
+            -  ubu:         Upper bounds on the inputs.
+            -  Ws:          State cost weights.
+            -  use_RTI:     Use RTI flag.
+            -  solver:      Acados solver.
 
         """
+        # =====================================================================
+        # Check configs
+        # =====================================================================
+
+        # Check if policy is a string or dictionary
+        if isinstance(policy, str):
+            policy = ch.get_config(policy, "pilots")
+
+        # Check if course is a string or dictionary
+        if isinstance(course, str):
+            course = ch.get_config(course, "courses")
+
+        # Check if frame is a string or dictionary
+        if isinstance(frame, str):
+            frame = ch.get_config(frame, "frames")
 
         # =====================================================================
         # Extract parameters
         # =====================================================================
         
         # Initialize the BaseController
-        super().__init__(configs_path)
+        super().__init__()
 
         # Policy Parameters
         plan,track = policy["plan"],policy["track"]
 
         kT,use_l2_time = plan["kT"],plan["use_l2_time"]
-
         hz,Nhn = track["hz"],track["horizon"]
         Qk,Rk,QN = np.diag(track["Qk"]),np.diag(track["Rk"]),np.diag(track["QN"])
         Ws = np.diag(track["Ws"])
@@ -116,7 +123,7 @@ class VehicleRateMPC(BaseController):
         ocp.cost.yref = np.zeros((ny,))
         ocp.cost.yref_e = np.zeros((ny_e, ))
 
-        ocp.constraints.x0 = tXUd[1:11,0]
+        ocp.constraints.x0 = tXUd[0,1:11]
         ocp.constraints.lbu = lbu
         ocp.constraints.ubu = ubu
         ocp.constraints.idxbu = np.array([0, 1, 2, 3])
@@ -137,10 +144,10 @@ class VehicleRateMPC(BaseController):
         ocp.solver_options.tf = Nhn/hz
         ocp.solver_options.qp_solver_warm_start = 1
 
-        solver = AcadosOcpSolver(ocp,json_file=solver_json,verbose=False)
+        solver = AcadosOcpSolver(ocp,verbose=False)
         
         # Clear the generated code
-        os.remove(os.path.join(os.getcwd(),solver_json))
+        os.remove(os.path.join(os.getcwd(),"acados_ocp.json"))
         shutil.rmtree(ocp.code_export_directory)
 
         # =====================================================================
@@ -151,8 +158,6 @@ class VehicleRateMPC(BaseController):
         # Necessary Variables for Base Controller -----------------------------
         self.name = name
         self.hz = hz
-        self.Nznn = {}
-        self.nhy = 0
 
         # ---------------------------------------------------------------------
         # Controller Specific Variables
@@ -171,9 +176,9 @@ class VehicleRateMPC(BaseController):
         # =====================================================================
 
         for _ in range(5):
-            self.control(0.0,tXUd[1:11,0])
+            self.control(0.0,tXUd[0,1:11],None,None,None,None)
 
-    def update_frame(self,frame:dict) -> None:
+    def update_frame(self,frame:str|dict) -> None:
         """
         Method to update the frame related variables of the controller.
         
@@ -181,59 +186,42 @@ class VehicleRateMPC(BaseController):
             - frame: Config Dict of the (drone) frame.
 
         """
+
+        # Check if frame is a string or dictionary
+        if isinstance(frame, str):
+            frame = ch.get_config(frame, "frames")
         
+        # Update the frame
         m,kt = frame["mass"],frame["motor_thrust_coeff"]
         tXUd = th.TsFO_to_tXU(self.Tsd,self.FOd,m,kt,self.fex)
 
         self.p[0],self.p[1] = m,kt
         self.tXUd = tXUd
 
-    def set_initial_memory(self,x0:np.ndarray,u0:np.ndarray|None=None) -> None:
-        """
-        Method to set the initial memory of the controller.
-
-        Args:
-            - x0: Initial state.
-            - u0: Initial control input (unused).
-
-        """
-        
-        # Educated guess for hover
-        if u0 is None:
-            u0 = np.array([-0.4,0.0,0.0,0.0])  
-
-        # Set initial parameter values
-        self.solver.set(0, "x", x0)
-        self.solver.set(0, "u", u0)
-        
-    def control(self,
-                tcr:float,xcr:np.ndarray,
-                upr:np.ndarray=None,
-                obj:np.ndarray=None,
-                icr:None=None,zcr:None=None) -> tuple[
-                    np.ndarray,None,np.ndarray]:
-        
+    def control(self,tcr:float,xcr:np.ndarray,upr:np.ndarray=None,
+                rgb:np.ndarray=None,dpt:np.ndarray=None,
+                fcr:np.ndarray=np.array([0.0,0.0,0.0,0.0,0.0,0.0])
+    ) -> tuple[np.ndarray, dict[str,np.ndarray]]:
         """
         Method to compute the control input for the VehicleRateMPC controller. We use the standard input arguments
         format with the unused arguments set to None. Likewise, we use the standard output format with the unused
         outputs set to None.
 
         Args:
-            - tcr: Time at the current control step.
-            - xcr: States at the current control step.
-            - upr: Previous control step inputs (unused).
-            - obj: Objective vector (unused).
-            - icr: Image at the current control step (unused).
-            - zcr: Feature vector at current control step (unused).
+            - tcr: Current time.
+            - xcr: Current state.
+            - upr: Previous control input (unused).
+            - rgb: RGB image (unused).
+            - dpt: Depth image (unused).
+            - fcr: Current force.
 
         Returns:
             - ucr:  Control input.
-            - zcr:  Output feature vector (unused).
-            - tsol: Time taken to solve components [setup ocp, solve ocp, unused, unused].
-
+            - Aux:  Auxiliary outputs (solve time).
         """
-        # Unused arguments
-        _ = upr,obj,icr,zcr
+
+        # Unpack inputs
+        _ = upr,rgb,dpt,fcr
 
         # Start timer
         t0 = time.time()
@@ -246,13 +234,13 @@ class VehicleRateMPC(BaseController):
 
         # Set desired trajectory
         for i in range(self.solver.acados_ocp.dims.N):
-            self.solver.cost_set(i, "yref", ydes[:,i])
-            self.solver.set(i,'x',ydes[0:10,i])
-            self.solver.set(i,'u',ydes[10:,i])
+            self.solver.cost_set(i, "yref", ydes[i,:])
+            self.solver.set(i,'x',ydes[i,0:10])
+            self.solver.set(i,'u',ydes[i,10:])
             self.solver.set(i,'p',self.p)
 
-        self.solver.cost_set(self.solver.acados_ocp.dims.N, "yref", ydes[0:10,-1])
-        self.solver.set(self.solver.acados_ocp.dims.N,'x',ydes[0:10,-1])
+        self.solver.cost_set(self.solver.acados_ocp.dims.N, "yref", ydes[-1,0:10])
+        self.solver.set(self.solver.acados_ocp.dims.N,'x',ydes[-1,0:10])
         
         # Solve OCP
         t1 = time.time()
@@ -269,20 +257,20 @@ class VehicleRateMPC(BaseController):
             self.solver.options_set('rti_phase', 2)
             status = self.solver.solve()
 
-            ucc = self.solver.get(0, "u")
+            ucr = self.solver.get(0, "u")
         else:
             # Solve ocp and get next control input
             try:
-                ucc = self.solver.solve_for_x0(x0_bar=xcr)
+                ucr = self.solver.solve_for_x0(x0_bar=xcr)
             except:
                 print("Warning: VehicleRateMPC failed to solve OCP. Using previous input.")
-                ucc = self.solver.get(0, "u")
+                ucr = self.solver.get(0, "u")
         t2 = time.time()
 
-        # Compute timer values
-        tsol = np.array([t1-t0,t2-t1,0.0,0.0])
+        # Compute auxiliary outputs
+        Aux = {"tsol":np.array([t1-t0,t2-t1])}      # Solve time [setup ocp,solve ocp]
 
-        return ucc,None,tsol
+        return ucr,Aux
 
     def get_ydes(self,tcr:float,xcr:np.ndarray) -> np.ndarray:
         """
@@ -300,7 +288,7 @@ class VehicleRateMPC(BaseController):
         # Unpack some stuff
         hz,ns = self.hz,int(self.hz)
         tXUd = self.tXUd
-        Ndes = tXUd.shape[1]
+        Ndes = tXUd.shape[0]
         Ws = self.Ws
 
         # Use time to get estimated index and section out the search space
@@ -308,20 +296,20 @@ class VehicleRateMPC(BaseController):
         ks0,ksf = idx_est-ns,idx_est+ns
         ks0,ksf = np.clip(ks0,0,Ndes-1),np.clip(ksf,0,Ndes)
         
-        Xi = tXUd[1:11,ks0:ksf]
+        Xi = tXUd[ks0:ksf,1:11]
         
         # Find the closest point in the search space (weighted)
-        dXi = Xi-xcr.reshape(-1,1)
-        J_dXi = np.array([x.T@Ws@x for x in dXi.T])
+        dXi = Xi-xcr
+        J_dXi = np.array([x.T@Ws@x for x in dXi])
         idx0 = ks0 + np.argmin(J_dXi)
         idxf = idx0 + self.solver.acados_ocp.dims.N+1
 
         # Pad if idxf is greater than the last index
         if idxf < Ndes:
-            ydes = tXUd[1:,idx0:idxf]
+            ydes = tXUd[idx0:idxf,1:]
         else:
-            ydes = tXUd[1:,idx0:]
-            ypad = np.tile(ydes[:,-1:],(1,idxf-tXUd.shape[1]))
-            ydes = np.hstack((ydes,ypad))
+            ydes = tXUd[idx0:,1:]
+            ypad = np.tile(ydes[-1:,:],(idxf-tXUd.shape[0],1))
+            ydes = np.vstack((ydes,ypad))
             
         return ydes
