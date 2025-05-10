@@ -9,7 +9,7 @@ description = "Flying in Gaussian Splats"
 authors = [{ name = "JunEn Low", email = "lowjunen@gmail.com.com" }]
 license = { file = "LICENSE" }
 readme = "README.md"
-requires-python = ">=3.10,<3.11"
+requires-python = ">=3.10"
 dependencies = [
     "numpy",
     "scipy",
