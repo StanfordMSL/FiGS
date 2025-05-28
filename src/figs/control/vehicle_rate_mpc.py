@@ -313,3 +313,26 @@ class VehicleRateMPC(BaseController):
             ydes = np.vstack((ydes,ypad))
             
         return ydes
+    
+    def reset_memory(self,x0:np.ndarray,u0:np.ndarray=None,
+                     fts0=None,pch0=None) -> None:
+        """
+        Method to reset the memory of the controller. This method is called
+        at the beginning of each trajectory rollout to reset the controller's
+        internal state and prepare it for a new trajectory.
+
+        VehicleRateMPC does not have any internal state to reset, so this
+        method is a no-op. However, it is included to maintain the interface
+        with the BaseController class and to allow for future extensions
+        where internal state might be added.
+        
+        Args:
+            - x0: Initial state.
+            - u0: Initial control input (unused).
+            - fts0: Initial forces (unused).
+            - pch0: Initial perturbations (unused).
+        """
+        # Unpack unused variables
+        _ = x0,u0,fts0,pch0
+        
+        pass

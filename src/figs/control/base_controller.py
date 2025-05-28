@@ -53,3 +53,16 @@ class BaseController(ABC):
             aux: Auxiliary outputs.
         """
         pass
+
+    @abstractmethod
+    def reset_memory(self,x0:np.ndarray,u0:np.ndarray=None,
+                     fts0=None,pch0=None) -> None:
+        """
+        Method to reset the memory of the controller.
+
+        Args:
+            - x0: Initial state.
+
+        """
+        
+        pass

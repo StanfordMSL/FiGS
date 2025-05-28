@@ -107,6 +107,15 @@ class Simulator:
             - tf:   Final time.
             - x0:   Initial state.
             - obj:  Objective to use for the simulation.
+
+        Returns:
+            - Tro:  Time vector.
+            - Xro:  State vector.
+            - Uro:  Control input vector.
+            - Fro:  Resultant force vector.
+            - Rgb:  RGB image vector.
+            - Dpt:  Depth image vector.
+            - Aux:  Auxiliary data vector.
         """
 
         # Load configs
@@ -145,16 +154,16 @@ class Simulator:
         n_sim2ctl = int(hz_sim/policy.hz)       # Number of simulation steps per control step
         mu_md = mu_md_s*(1/n_sim2ctl)           # Scale model mean noise to control rate
         std_md = std_md_s*(1/n_sim2ctl)         # Scale model std noise to control rate
-        dt = tf-t0                    # Total time
+        dt = np.round(tf-t0,5)                  # Total time
         Nsim = int(dt*hz_sim)                   # Number of simulation steps
         Nctl = int(dt*policy.hz)                # Number of control steps
-        
+
         # Trajectory Rollout Variables
         Tro,Xro,Uro = np.zeros((Nctl+1)),np.zeros((Nctl+1,nx)),np.zeros((Nctl,nu))
         Fro = np.zeros((Nctl,3))
         Rgb = np.zeros(((Nctl,) + rgb_dim),dtype=np.uint8)
         Dpt = np.zeros(((Nctl,) + dpt_dim),dtype=np.uint8)
-        Aux = []
+        Tsol = np.zeros((Nctl,))                # Time to solution for each control step
 
         # Transient Variables
         xcr,xpr,xsn = x0.copy(),x0.copy(),x0.copy()
@@ -166,6 +175,7 @@ class Simulator:
             tcr = t0+i/hz_sim
             fcr = fex.get_forces(xcr[0:6], noisy=True)
             pcr = np.hstack((m,kt,fcr))
+            fts = np.hstack((fcr,np.zeros(3)))  # Forces with zero torque
 
             # Control Loop
             if i % n_sim2ctl == 0:
@@ -179,14 +189,14 @@ class Simulator:
                 xsn[6:10] = oh.obedient_quaternion(xsn[6:10],xpr[6:10])
 
                 # Generate controller command
-                ucr,aux = policy.control(tcr,xsn,ucr,rgb,dpt,fcr)
+                ucr,aux = policy.control(tcr,xsn,ucr,rgb,dpt,fts)
 
                 # Log data
                 k = i//n_sim2ctl
                 Tro[k],Xro[k,:],Uro[k,:] = tcr,xcr,ucr
                 Fro[k,:] = fcr
                 Rgb[k,:,:,:],Dpt[k,:,:,:] = rgb,dpt
-                Aux.append(aux)
+                Tsol[k] = np.sum(aux["tsol"])
 
             # Update previous state
             xpr = xcr
@@ -202,4 +212,4 @@ class Simulator:
         Tro[Nctl] = t0+Nsim/hz_sim
         Xro[Nctl,:] = xcr
 
-        return Tro,Xro,Uro,Fro,Rgb,Dpt,Aux
+        return Tro,Xro,Uro,Fro,Rgb,Dpt,Tsol
