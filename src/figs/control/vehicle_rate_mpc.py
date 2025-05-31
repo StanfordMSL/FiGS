@@ -201,7 +201,7 @@ class VehicleRateMPC(BaseController):
     def control(self,tcr:float,xcr:np.ndarray,upr:np.ndarray=None,
                 rgb:np.ndarray=None,dpt:np.ndarray=None,
                 fcr:np.ndarray=np.array([0.0,0.0,0.0,0.0,0.0,0.0])
-    ) -> tuple[np.ndarray, dict[str,np.ndarray]]:
+    ) -> tuple[np.ndarray, dict[str,float]]:
         """
         Method to compute the control input for the VehicleRateMPC controller. We use the standard input arguments
         format with the unused arguments set to None. Likewise, we use the standard output format with the unused
@@ -217,7 +217,7 @@ class VehicleRateMPC(BaseController):
 
         Returns:
             - ucr:  Control input.
-            - Aux:  Auxiliary outputs (solve time).
+            - tsol: Solve times dictionary with keys "setup_ocp" and "solve_ocp".
         """
 
         # Unpack inputs
@@ -267,10 +267,12 @@ class VehicleRateMPC(BaseController):
                 ucr = self.solver.get(0, "u")
         t2 = time.time()
 
-        # Compute auxiliary outputs
-        Aux = {"tsol":np.array([t1-t0,t2-t1])}      # Solve time [setup ocp,solve ocp]
+        # Compute solve times
+        tsol = {"setup_ocp":t1-t0,
+                "solve_ocp":t2-t1
+                }
 
-        return ucr,Aux
+        return ucr,tsol
 
     def get_ydes(self,tcr:float,xcr:np.ndarray) -> np.ndarray:
         """

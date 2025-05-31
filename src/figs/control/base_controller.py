@@ -36,7 +36,7 @@ class BaseController(ABC):
     def control(self,tcr:float,xcr:np.ndarray,upr:np.ndarray,
                 rgb:np.ndarray,dpt:np.ndarray,
                 fcr:np.ndarray
-    ) -> tuple[np.ndarray, dict[str,np.ndarray|torch.Tensor]]:
+    ) -> tuple[np.ndarray, dict[str,float]]:
         """
         Abstract control method to be implemented by subclasses.
 
@@ -50,7 +50,7 @@ class BaseController(ABC):
 
         Returns:
             ucr: Controller output.
-            aux: Auxiliary outputs.
+            tsol: Dictionary containing the solve times.
         """
         pass
 

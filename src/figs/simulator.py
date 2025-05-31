@@ -117,6 +117,8 @@ class Simulator:
             - Dpt:  Depth image vector.
             - Aux:  Auxiliary data vector.
         """
+        # Wrench dimensions
+        nw = 6                  # Force + Torque
 
         # Load configs
         Rout = self.conFiG["rollout"]
@@ -160,7 +162,7 @@ class Simulator:
 
         # Trajectory Rollout Variables
         Tro,Xro,Uro = np.zeros((Nctl+1)),np.zeros((Nctl+1,nx)),np.zeros((Nctl,nu))
-        Fro = np.zeros((Nctl,3))
+        Wro = np.zeros((Nctl,nw))
         Rgb = np.zeros(((Nctl,) + rgb_dim),dtype=np.uint8)
         Dpt = np.zeros(((Nctl,) + dpt_dim),dtype=np.uint8)
         Tsol = np.zeros((Nctl,))                # Time to solution for each control step
@@ -170,12 +172,13 @@ class Simulator:
         ucr = np.array([-(m*g)/(Nrtr*kt),0.0,0.0,0.0])
 
         # Rollout Loop
+        tau_cr = np.zeros(3)                            # Current torque (unmodeled due to body rate dynamics)
         for i in range(Nsim):
             # Get current variables
-            tcr = t0+i/hz_sim
-            fcr = fex.get_forces(xcr[0:6], noisy=True)
-            pcr = np.hstack((m,kt,fcr))
-            fts = np.hstack((fcr,np.zeros(3)))  # Forces with zero torque
+            tcr = t0+i/hz_sim                           # Current time
+            fcr = fex.get_forces(xcr[0:6], noisy=True)  # Current forces
+            pcr = np.hstack((m,kt,fcr))                 # Parameters for the dynamics solver            
+            fts = np.hstack((fcr,tau_cr))               # Sensed force/torque vector
 
             # Control Loop
             if i % n_sim2ctl == 0:
@@ -189,14 +192,14 @@ class Simulator:
                 xsn[6:10] = oh.obedient_quaternion(xsn[6:10],xpr[6:10])
 
                 # Generate controller command
-                ucr,aux = policy.control(tcr,xsn,ucr,rgb,dpt,fts)
+                ucr,tsol = policy.control(tcr,xsn,ucr,rgb,dpt,fts)
 
                 # Log data
                 k = i//n_sim2ctl
                 Tro[k],Xro[k,:],Uro[k,:] = tcr,xcr,ucr
-                Fro[k,:] = fcr
+                Wro[k,0:3] = fcr
                 Rgb[k,:,:,:],Dpt[k,:,:,:] = rgb,dpt
-                Tsol[k] = np.sum(aux["tsol"])
+                Tsol[k] = sum(tsol.values())
 
             # Update previous state
             xpr = xcr
@@ -212,4 +215,4 @@ class Simulator:
         Tro[Nctl] = t0+Nsim/hz_sim
         Xro[Nctl,:] = xcr
 
-        return Tro,Xro,Uro,Fro,Rgb,Dpt,Tsol
+        return Tro,Xro,Uro,Wro,Rgb,Dpt,Tsol
