@@ -54,7 +54,6 @@ class BaseController(ABC):
         """
         pass
 
-    @abstractmethod
     def reset_memory(self,x0:np.ndarray,u0:np.ndarray=None,
                      fts0=None,pch0=None) -> None:
         """
@@ -65,4 +64,14 @@ class BaseController(ABC):
 
         """
         
+        pass
+
+    def update_frame(self,frame:str|dict) -> None:
+        """
+        Method to update the frame related variables of the controller.
+        
+        Args:
+            - frame: Config Dict of the (drone) frame.
+
+        """
         pass

@@ -85,10 +85,16 @@ def generate_specifications(
     quad["nx"],quad["nu"] = nx,nu
     quad["Nrtr"] = Nrtr
     quad["Tc2b"] = np.array(Tc2b)
+    quad["Tb2c"] = np.linalg.inv(quad["Tc2b"])
     quad["K"] = np.array([
         [ fx, 0.0,  cx],
         [0.0,  fy,  cy],
         [0.0, 0.0, 1.0]
+    ])
+    quad["Rgl2cv"] = np.array([
+        [ 1.0, 0.0, 0.0],
+        [ 0.0,-1.0, 0.0],
+        [ 0.0, 0.0,-1.0]
     ])
 
     quad["camera"] = camera
