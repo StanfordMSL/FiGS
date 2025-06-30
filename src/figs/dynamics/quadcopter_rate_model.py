@@ -1,37 +1,42 @@
 from acados_template import AcadosModel
 from casadi import SX,vertcat
 
-def export_quadcopter_ode_model(m:float,tn:float) -> AcadosModel:
+def export_model() -> AcadosModel:
 
-    model_name = 'quadcopter_ode_model'
+    model_name = 'quadcopter_full_model'
 
-    # set up states
+    # set up states (x)
     px = SX.sym('px')
     py = SX.sym('py')
     pz = SX.sym('pz')
-    p = vertcat(px,py,pz)
 
     vx = SX.sym('vx')
     vy = SX.sym('vy')
     vz = SX.sym('vz')
-    v = vertcat(vx,vy,vz)
 
     qx = SX.sym('qx')
     qy = SX.sym('qy')
     qz = SX.sym('qz')
     qw = SX.sym('qw')
-    q = vertcat(qx,qy,qz,qw)
 
-    x = vertcat(p,v,q)
+    x = vertcat(px,py,pz,vx,vy,vz,qx,qy,qz,qw)
 
-    # set up controls
+    # set up controls (u)
     uf = SX.sym('uf')
     wx = SX.sym('wx')
     wy = SX.sym('wy')
     wz = SX.sym('wz')
-    uw = vertcat(wx,wy,wz)
-
-    u = vertcat(uf,uw)
+    
+    u = vertcat(uf,wx,wy,wz)
+    
+    # set up parameters (p)
+    m = SX.sym('m')
+    kt = SX.sym('kt')
+    fx = SX.sym('fx')
+    fy = SX.sym('fy')
+    fz = SX.sym('fz')
+    
+    p = vertcat(m,kt,fx,fy,fz)
 
     # xdot
     px_dot = SX.sym('px_dot')
@@ -54,10 +59,17 @@ def export_quadcopter_ode_model(m:float,tn:float) -> AcadosModel:
 
     # some intermediate variables
     V1a = vertcat(0.0, 0.0, 9.81)
-    V1b = (tn*uf/m)*vertcat(
-          2.0*(qx*qz + qy*qw),
-          2.0*(qy*qz - qx*qw),
-          qw*qw - qx*qx - qy*qy + qz*qz)  
+    V1b = (4*kt*uf/m)*vertcat(
+            2.0*(qx*qz + qy*qw),
+            2.0*(qy*qz - qx*qw),
+            qw*qw - qx*qx - qy*qy + qz*qz
+            )
+    V1c = (1/m)*vertcat(
+            fx,
+            fy,
+            fz
+            )
+    
     V2 = (1/2)*vertcat(
          qw*wx - qz*wy + qy*wz,
          qz*wx + qw*wy - qx*wz,
@@ -66,8 +78,8 @@ def export_quadcopter_ode_model(m:float,tn:float) -> AcadosModel:
 
     # dynamics
     f_expl = vertcat(
-                v,
-                V1a + V1b,
+                vx,vy,vz,
+                V1a + V1b + V1c,
                 V2
                 )
     
@@ -76,11 +88,13 @@ def export_quadcopter_ode_model(m:float,tn:float) -> AcadosModel:
     # Pack into acados model
     model = AcadosModel()
 
+    model.x = x
+    model.u = u
+    model.p = p
+    model.xdot = xdot
     model.f_impl_expr = f_impl
     model.f_expl_expr = f_expl
-    model.x = x
-    model.xdot = xdot
-    model.u = u
+
     model.name = model_name
 
     return model

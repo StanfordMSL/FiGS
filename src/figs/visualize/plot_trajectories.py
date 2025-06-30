@@ -1,11 +1,11 @@
 import numpy as np
 import matplotlib.pyplot as plt
-import figs.utilities.trajectory_helper as th
+import figs.utilities.transform_helper as th
 
 from scipy.spatial.transform import Rotation as R
 from typing import Union,Tuple,List
 
-def plot_tXU_spatial(tXUs:Union[np.ndarray,List[np.ndarray]],
+def plot_tXU_3D(tXUs:Union[np.ndarray,List[np.ndarray]],
                      n_fr:int=None) -> None:
     """
     Plot the spatial trajectory.
@@ -110,55 +110,6 @@ def plot_tXU_time(tXUs:Union[np.ndarray,List[np.ndarray]]) -> None:
     
     plt.tight_layout()
     plt.show(block=False)
-
-def plot_RO_spatial(ROs:Union[
-                            Tuple[np.ndarray,np.ndarray,np.ndarray],
-                            List[Tuple[np.ndarray,np.ndarray,np.ndarray]]],
-                            n_fr:int=None) -> None:
-    """
-    Plot the spatial trajectory from a rollout.
-
-    Args:
-        - ROs: Tuple of Tro, Xro, Uro arrays or a list of tuples of Tro, Xro, Uro arrays.
-        - n_fr: Number of steps between plots of the quadcopter frame.
-
-    """
-
-    # Capture case where only one tXU is passed
-    if isinstance(ROs, Tuple):
-        ROs = [ROs]
-
-    # Convert to tXU
-    tXUs = []
-    for RO in ROs:
-        tXUs.append(th.RO_to_tXU(RO))
-
-    # Plot the spatial trajectory
-    plot_tXU_spatial(tXUs,n_fr)
-    
-def plot_RO_time(ROs:Union[
-                        Tuple[np.ndarray,np.ndarray,np.ndarray],
-                        List[Tuple[np.ndarray,np.ndarray,np.ndarray]]]) -> None:
-    """
-    Plot the time trajectory from a rollout.
-
-    Args:
-        - ROs: Tuple of Tro, Xro, Uro arrays or a list of tuples of Tro, Xro, Uro arrays.
-    
-    """
-
-    # Capture case where only one tXU is passed
-    if isinstance(ROs, Tuple):
-        ROs = [ROs]
-
-    # Convert to tXU
-    tXUs = []
-    for RO in ROs:
-        tXUs.append(th.RO_to_tXU(RO))
-
-    # Plot the time trajectory
-    plot_tXU_time(tXUs)
-
 
 def get_plot_limits(tXUs:List[np.ndarray],use_aesthetics:bool=True,
                     pz_aesth:np.ndarray=np.array([0.0,-2.0]),

@@ -4,7 +4,6 @@ import json
 
 from pathlib import Path
 from abc import ABC, abstractmethod
-from typing import Dict,Union,Tuple
 
 class BaseController(ABC):
     """
@@ -15,9 +14,10 @@ class BaseController(ABC):
     
     Attributes:
         configs_path:   Path to the directory containing the JSON files.
+        name:           Name of the controller.
         hz:             Frequency of the controller.
-        nzcr:           Number of states in the controller.
-
+        Nhy:            History sequence length.
+        Nhn:            Horizon sequence length.
     """
     def __init__(self,configs_path:Path=None) -> None:
         """
@@ -27,66 +27,51 @@ class BaseController(ABC):
             configs_path: Path to the directory containing the JSON files.
 
         """
-        # Set the configuration directory
-        if configs_path is None:
-            self.configs_path = Path(__file__).parent.parent.parent.parent.parent/'configs'
-        else:
-            self.configs_path = configs_path
 
         # Necessary attributes
-        self.name = None
-        self.hz = None
-        self.nzcr = None
-
+        self.name:str = None                # Name of the controller
+        self.hz:int = None                  # Frequency of the controller
+    
     @abstractmethod
-    def control(self, tcr: float, xcr: np.ndarray,
-                upr: Union[None, np.ndarray],
-                obj: Union[None, np.ndarray],
-                icr: Union[None, np.ndarray],
-                zcr: Union[None, torch.Tensor]
-                ) -> Tuple[np.ndarray, Union[None, torch.Tensor], Union[None, np.ndarray], np.ndarray]:
+    def control(self,tcr:float,xcr:np.ndarray,upr:np.ndarray,
+                rgb:np.ndarray,dpt:np.ndarray,
+                fcr:np.ndarray
+    ) -> tuple[np.ndarray, dict[str,float]]:
         """
         Abstract control method to be implemented by subclasses.
 
         Args:
-            tcr: Time at the current control step.
-            xcr: States at the current control step.
-            upr: Previous control step inputs (if any, None otherwise).
-            obj: Objective vector (if any, None otherwise).
-            icr: Image at the current control step (if any, None otherwise).
-            zcr: Feature vector at current control step (if any, None otherwise).
+            tcr: Current time.
+            xcr: Current state.
+            upr: Previous control input.
+            rgb: RGB image.
+            dpt: Depth image.
+            fcr: Current force.
 
         Returns:
-            ucr: Control input.
-            zcr: Output feature vector (if any, None otherwise).
-            adv: Advisor output (if any, None otherwise).
-            tsol: Time taken to solve components.
-
+            ucr: Controller output.
+            tsol: Dictionary containing the solve times.
         """
         pass
 
-    def load_json_config(self, config:str, name:str) -> Dict:
+    def reset_memory(self,x0:np.ndarray,u0:np.ndarray=None,
+                     fts0=None,pch0=None) -> None:
         """
-        Load a JSON configuration file.
+        Method to reset the memory of the controller.
 
         Args:
-            config: Name of the configuration directory.
-            name: Name of the configuration file.
+            - x0: Initial state.
 
-        Returns:
-            config: Dictionary containing the configuration.
-        
         """
-        json_config = self.configs_path/config/(name+".json")
+        
+        pass
 
-        if not json_config.exists():
-            raise ValueError(f"The json file '{json_config}' does not exist.")
-        else:
-            # Load the json configuration
-            with open(json_config) as file:
-                config = json.load(file)
-            
-            # Add the name to the configuration
-            config["name"] = name
+    def update_frame(self,frame:str|dict) -> None:
+        """
+        Method to update the frame related variables of the controller.
+        
+        Args:
+            - frame: Config Dict of the (drone) frame.
 
-        return config
+        """
+        pass

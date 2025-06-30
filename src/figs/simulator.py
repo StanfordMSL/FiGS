@@ -1,16 +1,15 @@
 import os
 import shutil
-import json
-import torch
 import numpy as np
-import figs.utilities.trajectory_helper as th
+import figs.utilities.config_helper as ch
+import figs.utilities.transform_helper as th
+import figs.utilities.orientation_helper as oh
+import figs.dynamics.quadcopter_rate_model as qrm
+import figs.dynamics.quadcopter_specifications as qs
 
-from pathlib import Path
-from typing import Type,Union,Tuple
 from acados_template import AcadosSimSolver, AcadosSim
+from figs.dynamics.external_forces import ExternalForces
 from figs.control.base_controller import BaseController
-from figs.dynamics.model_equations import export_quadcopter_ode_model
-from figs.dynamics.model_specifications import generate_specifications
 from figs.render.gsplat import GSplat
 
 class Simulator:
@@ -18,273 +17,202 @@ class Simulator:
     Class to simulation in FiGS
     """
 
-    def __init__(self,
-                 scene_name:str,rollout_name:str='baseline',
-                 frame_name:Union[None,str]=None,
-                 configs_path:Path=None,gsplats_path:Path=None) -> None:
+    def __init__(self,gsplat:str|GSplat,method:str|dict,frame:None|str|dict=None,forces:None|dict=None) -> None:
         """
         The FiGS simulator simulates flying in a Gaussian Splat by using an ACADOS integrator
-        (solver) to rollout a trajectory in a Gaussian Splat (gsplat) according to a control
-        policy (policy) and simulation configuration (conFiG).
-
-        For efficiency, the gsplat and conFiG are tied to individual Simulator objects. The
-        solver and policy can be swapped out during runtime. This allows us to abstract away
-        the JSON-based configuration and C backend of ACADOS. Note that every time the solver
-        gets updated, the conFiG must also be uploaded with new drone specifications.
+        (solver) to rollout a trajectory in a Gaussian Splat (gsplat) in the presence of a set
+        of external forces (forces) and according to a control policy (policy) and simulation
+        configuration (conFiG).
 
         Args:
-            - scene_name:       Name of the scene to load.
-            - rollout_name:     Rollout config to load.
-            - frame_name:       Name of the frame to load (None if not instantiating with a frame).
-            - configs_path:     Path to the directory containing the JSON files.
-            - gsplats_path:     Path to the directory containing the gsplats.
+            - gsplat:   GSplat.
+            - method:   Method config.
+            - frame:    Frame config (None if not instantiating with a frame).
+            - forces:   Forces config (None if no external forces).
 
         Attributes:
-            - gsplat:           Gaussian Splat of the scene.
-            - conFiG:           Dictionary holding simulation configurations (frequency, noise, delay and drone specs).
-            - solver:           An ACADOS integrator for the drone dynamics.
-            - policy:           Policy to control the drone (an ACADOS OCP based MPC by default).
-            - configs_path:     Path to the configuration directory.
-            - workspace_path:   Path to the gsplat directory.
+            - gsplat:   Gaussian Splat of the scene.
+            - conFiG:   Dictionary holding simulation configurations.
+            - solver:   An ACADOS integrator for the drone dynamics.
         """
 
-        # Set the configuration directory
-        if configs_path is None:
-            self.configs_path = Path(__file__).parent.parent.parent.parent/'configs'
-        else:
-            self.configs_path = configs_path
-
-        # Set the gsplat directory
-        if gsplats_path is None:
-            self.workspace_path = Path(__file__).parent.parent.parent.parent/'gsplats'/'workspace'
-        else:
-            self.workspace_path = gsplats_path/'workspace'
-
-        # Instantiate empty attributes
-        self.gsplat = None
-        self.conFiG = {"rollout":{},"drone":{}}
-        self.solver = None
-
-        # Load the attributes
-        self.load_scene(scene_name)
-        self.load_rollout(rollout_name)
-
-        if frame_name is not None:
-            self.load_frame(frame_name)
-
-    def load_scene(self, scene_name:str):
-        """
-        Loads/Updates the gsplat attribute given a scene name.
-
-        Args:
-            - scene_name:     Name of the scene to load.
-        """
-
-        # Get current and workspace directories
-        curr_path,work_path = Path(os.getcwd()),self.workspace_path
-
-        # Find the GSplat configuration
-        search_path = work_path/'outputs'/scene_name
-        yaml_configs = list(search_path.rglob("*.yml"))
-    
-        if len(yaml_configs) == 0:
-            raise ValueError(f"The search path '{search_path}' did not return any configurations.")
-        elif len(yaml_configs) > 1:
-            raise ValueError(f"The search path '{search_path}' returned multiple configurations. Please specify a unique configuration within the directory.")
-        else:
-            gsplat_config = {"name":scene_name,"path":yaml_configs[0]}
-
-        # Load GSplat (from the workspace directory to avoid path issues)
-        os.chdir(work_path)
-        gsplat = GSplat(gsplat_config)
-        os.chdir(curr_path)
-
-        # Update attribute(s)
-        self.gsplat = gsplat
-
-    def load_rollout(self, rollout:Union[str,dict]):
-        """
-        Loads/Updates the conFiG attribute given a rollout name.
-
-        Args:
-            - rollout:   Type of rollout to load.
-        """
-
-        # Check if rollout is a string or dictionary
-        if isinstance(rollout,str):
-            # Load the rollout config
-            json_config = self.configs_path/"rollout"/(rollout+".json")
-
-            if not json_config.exists():
-                raise ValueError(f"The json file '{json_config}' does not exist.")
-            else:
-                # Load the json configuration
-                with open(json_config) as file:
-                    rollout_config = json.load(file)
-        else:
-            rollout_config = rollout
-
-        # Update attribute(s)
-        self.conFiG["rollout"] = rollout_config
-        
-    def load_frame(self, frame:Union[str,dict]):
-        """
-        Loads the solver attribute.
-
-        Args:
-            - frame_name:     Name of the frame to load.
-        """
+        # Check if gsplat is a string or GSplat object
+        if isinstance(gsplat, str):
+            gsplat = ch.get_gsplat(gsplat)
         
         # Check if rollout is a string or dictionary
-        if isinstance(frame,str):
-            # Load the frame config
-            json_config = self.configs_path/"frame"/(frame+".json")
+        if isinstance(method, str):
+            method = ch.get_config(method, "methods")
+        rollout = method["rollout"]
 
-            if not json_config.exists():
-                raise ValueError(f"The json file '{json_config}' does not exist.")
-            else:
-                # Load the json configuration
-                with open(json_config) as file:
-                    frame_config = json.load(file)
-        else:
-            frame_config = frame
+        # Check if frame is a string or dictionary
+        if isinstance(frame, str):
+            frame = ch.get_config(frame, "frames")
 
-        # Clear previous solver
-        del self.solver
-        
-        # Some useful intermediate variables
-        drn_spec = generate_specifications(frame_config)
+        # Instantiate the dynamics solver
         sim_json = 'figs_sim_solver.json'
 
-        # Generate the simulator
         sim = AcadosSim()
-        sim.model = export_quadcopter_ode_model(drn_spec["m"],drn_spec["tn"])  
-        sim.solver_options.T = 1/self.conFiG["rollout"]["frequency"]
+        sim.model = qrm.export_model()
+        sim.parameter_values = np.zeros(sim.model.p.shape)
+        sim.solver_options.T = 1/rollout["frequency"]
         sim.solver_options.integrator_type = 'IRK'
 
-        solver = AcadosSimSolver(sim, json_file=sim_json, verbose=False)
+        # Instantiate attributes
+        self.gsplat = gsplat
+        self.conFiG = {
+            "rollout": rollout,
+            "frame": frame,
+            "forces": forces,
+            }
+        self.solver = AcadosSimSolver(sim, json_file=sim_json, verbose=False)
 
         # Clean up the ACADOS generation files
         os.remove(os.path.join(os.getcwd(),sim_json))
         shutil.rmtree(sim.code_export_directory)
-        
+
+    def update_frame(self, frame_config:str|dict):
+        """
+        Loads/Updates the conFiG attribute given a rollout name.
+
+        Args:
+            - frame_config: Configuration dictionary.
+        """
+        # Check if frame_config is a string or dictionary
+        if isinstance(frame_config, str):
+            frame_config = ch.get_config(frame_config, "frames")
+
         # Update attribute(s)
-        self.solver = solver
-        self.conFiG["drone"] = drn_spec
-    
-    def simulate(self,policy:Type[BaseController],
-                 t0:float,tf:int,x0:np.ndarray,obj:Union[None,np.ndarray]=None
-                 ) -> Tuple[np.ndarray,np.ndarray,np.ndarray,np.ndarray,np.ndarray,np.ndarray]:
+        self.conFiG["frame"] = frame_config
+
+    def update_forces(self, forces_config:dict):
+        """
+        Loads/Updates the conFiG attribute given a rollout name.
+
+        Args:
+            - forces_config: Configuration dictionary.
+        """
+
+        # Update attribute(s)
+        self.conFiG["forces"] = forces_config
+
+    def simulate(self,policy:BaseController,
+                 t0:float,tf:int,x0:np.ndarray
+                 ) -> tuple[np.ndarray,np.ndarray,np.ndarray,np.ndarray,np.ndarray,np.ndarray,list[dict]]:
         """
         Simulates the flight.
 
         Args:
-            - t0:       Initial time.
-            - tf:       Final time.
-            - x0:       Initial state.
-            - obj:      Objective to use for the simulation.
+            - t0:   Initial time.
+            - tf:   Final time.
+            - x0:   Initial state.
+            - obj:  Objective to use for the simulation.
+
+        Returns:
+            - Tro:  Time vector.
+            - Xro:  State vector.
+            - Uro:  Control input vector.
+            - Fro:  Resultant force vector.
+            - Rgb:  RGB image vector.
+            - Dpt:  Depth image vector.
+            - Aux:  Auxiliary data vector.
         """
+        # Wrench dimensions
+        nw = 6                  # Force + Torque
 
-        # Check if frame is loaded
-        if self.solver is None:
-            raise ValueError("Frame has not been loaded. Please load a frame before simulating.")
+        # Load configs
+        Rout = self.conFiG["rollout"]
+        Spec = qs.generate_specifications(self.conFiG["frame"])
+        fex = ExternalForces(self.conFiG["forces"])
 
-        # Unpack Variables
-        hz_sim = self.conFiG["rollout"]["frequency"]
-        t_dly = self.conFiG["rollout"]["delay"]
-        mu_md_s = np.array(self.conFiG["rollout"]["model_noise"]["mean"])
-        std_md_s = np.array(self.conFiG["rollout"]["model_noise"]["std"])
-        mu_sn = np.array(self.conFiG["rollout"]["sensor_noise"]["mean"])
-        std_sn = np.array(self.conFiG["rollout"]["sensor_noise"]["std"])
-        use_fusion = self.conFiG["rollout"]["sensor_model_fusion"]["use_fusion"]
-        Wf = np.diag(self.conFiG["rollout"]["sensor_model_fusion"]["weights"])
-        nx,nu = self.conFiG["drone"]["nx"],self.conFiG["drone"]["nu"]
-        cam_cfg = self.conFiG["drone"]["camera"]
-        height,width,channels = cam_cfg["height"],cam_cfg["width"],cam_cfg["channels"]
-        T_c2b = self.conFiG["drone"]["T_c2b"]
+        # Drone Variables
+        nx,nu = Spec["nx"],Spec["nu"]
+        m,kt = Spec["m"],Spec["kt"]
+        g,Nrtr = Spec["g"],Spec["Nrtr"]
+        Tc2b = Spec["Tc2b"]
+        rgb_dim,dpt_dim = Spec["rgb_dim"],Spec["dpt_dim"]
+        camera = self.gsplat.generate_output_camera(Spec["camera"])
+
+        # Base Rollout Variables
+        hz_sim = Rout["frequency"]
+        
+        # Noise Rollout Variables
+        model_noise = Rout["noise"]["model"]
+        sensor_noise = Rout["noise"]["sensor"]
+
+        if model_noise is None:
+            mu_md_s,std_md_s = np.zeros(nx),np.zeros(nx)
+        else:
+            mu_md_s = np.array(model_noise["mean"])
+            std_md_s = np.array(model_noise["std"])
+
+        if sensor_noise is None:
+            mu_sn,std_sn = np.zeros(nx),np.zeros(nx)
+        else:
+            mu_sn = np.array(sensor_noise["mean"])
+            std_sn = np.array(sensor_noise["std"])
 
         # Derived Variables
-        n_sim2ctl = int(hz_sim/policy.hz)  # Number of simulation steps per control step
+        n_sim2ctl = int(hz_sim/policy.hz)       # Number of simulation steps per control step
         mu_md = mu_md_s*(1/n_sim2ctl)           # Scale model mean noise to control rate
         std_md = std_md_s*(1/n_sim2ctl)         # Scale model std noise to control rate
-        dt = np.round(tf-t0)
-        Nsim = int(dt*hz_sim)
-        Nctl = int(dt*policy.hz)
-        n_delay = int(t_dly*hz_sim)
-        Wf_sn,Wf_md = Wf,1-Wf
+        dt = np.round(tf-t0,5)                  # Total time
+        Nsim = int(dt*hz_sim)                   # Number of simulation steps
+        Nctl = int(dt*policy.hz)                # Number of control steps
 
-        # Rollout Variables
-        Tro,Xro,Uro = np.zeros(Nctl+1),np.zeros((nx,Nctl+1)),np.zeros((nu,Nctl))
-        Iro = np.zeros((Nctl,height,width,channels),dtype=np.uint8)
-        Xro[:,0] = x0
+        # Trajectory Rollout Variables
+        Tro,Xro,Uro = np.zeros((Nctl+1)),np.zeros((Nctl+1,nx)),np.zeros((Nctl,nu))
+        Wro = np.zeros((Nctl,nw))
+        Rgb = np.zeros(((Nctl,) + rgb_dim),dtype=np.uint8)
+        Dpt = np.zeros(((Nctl,) + dpt_dim),dtype=np.uint8)
+        Tsol = np.zeros((Nctl,))                # Time to solution for each control step
 
-        # Diagnostics Variables
-        Tsol = np.zeros((4,Nctl))
-        Adv = np.zeros((nu,Nctl))
-        
         # Transient Variables
         xcr,xpr,xsn = x0.copy(),x0.copy(),x0.copy()
-        ucm = np.array([-self.conFiG["drone"]['m']/self.conFiG["drone"]['tn'],0.0,0.0,0.0])
-        udl = np.hstack((ucm.reshape(-1,1),ucm.reshape(-1,1)))
-        zcr = torch.zeros(policy.nzcr) if isinstance(policy.nzcr, int) else None
+        ucr = np.array([-(m*g)/(Nrtr*kt),0.0,0.0,0.0])
 
-        # Instantiate camera object
-        camera = self.gsplat.generate_output_camera(cam_cfg)
-
-        # Rollout
+        # Rollout Loop
+        tau_cr = np.zeros(3)                            # Current torque (unmodeled due to body rate dynamics)
         for i in range(Nsim):
-            # Get current time and state
-            tcr = t0+i/hz_sim
+            # Get current variables
+            tcr = t0+i/hz_sim                           # Current time
+            fcr = fex.get_forces(xcr[0:6], noisy=True)  # Current forces
+            pcr = np.hstack((m,kt,fcr))                 # Parameters for the dynamics solver            
+            fts = np.hstack((fcr,tau_cr))               # Sensed force/torque vector
 
-            # Control
+            # Control Loop
             if i % n_sim2ctl == 0:
-                # Get current image
-                Tb2w = th.xv_to_T(xcr)
-                T_c2w = Tb2w@T_c2b
-                icr = self.gsplat.render_rgb(camera,T_c2w)
+                # Get current images
+                Tb2w = th.x_to_T(xcr)
+                Tc2w = Tb2w@Tc2b
+                rgb,dpt = self.gsplat.render_rgb(camera,Tc2w)
 
                 # Add sensor noise and syncronize estimated state
-                if use_fusion:
-                    xsn += np.random.normal(loc=mu_sn,scale=std_sn)
-                    xsn = Wf_sn@xsn + Wf_md@xcr
-                else:
-                    xsn = xcr + np.random.normal(loc=mu_sn,scale=std_sn)
-                xsn[6:10] = th.obedient_quaternion(xsn[6:10],xpr[6:10])
+                xsn = xcr + np.random.normal(loc=mu_sn,scale=std_sn)
+                xsn[6:10] = oh.obedient_quaternion(xsn[6:10],xpr[6:10])
 
                 # Generate controller command
-                ucm,zcr,adv,tsol = policy.control(tcr,xsn,ucm,obj,icr,zcr)
+                ucr,tsol = policy.control(tcr,xsn,ucr,rgb,dpt,fts)
 
-                # Update delay buffer
-                udl[:,0] = udl[:,1]
-                udl[:,1] = ucm
-
-            # Extract delayed command
-            uin = udl[:,0] if i%n_sim2ctl < n_delay else udl[:,1]
-
-            # Simulate both estimated and actual states
-            xcr = self.solver.simulate(x=xcr,u=uin)
-            if use_fusion:
-                xsn = self.solver.simulate(x=xsn,u=uin)
-
-            # Add model noise
-            xcr = xcr + np.random.normal(loc=mu_md,scale=std_md)
-            xcr[6:10] = th.obedient_quaternion(xcr[6:10],xpr[6:10])
+                # Log data
+                k = i//n_sim2ctl
+                Tro[k],Xro[k,:],Uro[k,:] = tcr,xcr,ucr
+                Wro[k,0:3] = fcr
+                Rgb[k,:,:,:],Dpt[k,:,:,:] = rgb,dpt
+                Tsol[k] = sum(tsol.values())
 
             # Update previous state
             xpr = xcr
-            
-            # Store values
-            if i % n_sim2ctl == 0:
-                k = i//n_sim2ctl
 
-                Iro[k,:,:,:] = icr
-                Tro[k] = tcr
-                Xro[:,k+1] = xcr
-                Uro[:,k] = ucm
-                Tsol[:,k] = tsol
-                Adv[:,k] = adv
+            # Simulate both estimated and actual states
+            xcr = self.solver.simulate(x=xcr,u=ucr,p=pcr)
 
-        # Log final time
+            # Add model noise
+            xcr = xcr + np.random.normal(loc=mu_md,scale=std_md)
+            xcr[6:10] = oh.obedient_quaternion(xcr[6:10],xpr[6:10])
+
+        # Log entry
         Tro[Nctl] = t0+Nsim/hz_sim
+        Xro[Nctl,:] = xcr
 
-        return Tro,Xro,Uro,Iro,Tsol,Adv
+        return Tro,Xro,Uro,Wro,Rgb,Dpt,Tsol

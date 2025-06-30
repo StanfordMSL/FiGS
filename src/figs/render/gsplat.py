@@ -7,12 +7,12 @@ from nerfstudio.utils.eval_utils import eval_setup
 from typing import Dict, Union 
 
 class GSplat():
-    def __init__(self, scene_config:Dict[str,Union[str,Path]]) -> None:
+    def __init__(self, gsplat_path:Path) -> None:
         """
         GSplat class for rendering images from GSplat pipeline.
 
         Args:
-            - scene_config: FiGS scene configuration dictionary.
+            - gsplat_config: FiGS gsplat configuration dictionary.
 
         Variables:
             - device: Device to run the pipeline on.
@@ -24,7 +24,7 @@ class GSplat():
 
         # Some useful intermediate variables
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        T_w2g = np.array([
+        Tw2g = np.array([
             [ 1.00, 0.00, 0.00, 0.00],
             [ 0.00,-1.00, 0.00, 0.00],
             [ 0.00, 0.00,-1.00, 0.00],
@@ -33,8 +33,8 @@ class GSplat():
 
         # Class variables
         self.device = device
-        self.config,self.pipeline, _, _ = eval_setup(scene_config["path"],test_mode="inference")
-        self.T_w2g = T_w2g
+        self.config,self.pipeline, _, _ = eval_setup(gsplat_path,test_mode="inference")
+        self.Tw2g = Tw2g
 
     def generate_output_camera(self, camera_config:Dict[str,Union[int,float]]) -> Cameras:
         """
@@ -78,20 +78,25 @@ class GSplat():
 
         Returns:
             - image_rgb: Rendered RGB image.
-
+            - image_dpt: Rendered depth image.
         """
 
         # Extract the camera to gsplat pose
-        T_c2g = self.T_w2g@T_c2w
-        P_c2g = torch.tensor(T_c2g[0:3,:]).float()
+        Tc2g = self.Tw2g@T_c2w
+        Pc2g = torch.tensor(Tc2g[0:3,:]).float()
 
         # Render rgb image from the pose
-        camera.camera_to_worlds = P_c2g[None,:3, ...]
+        camera.camera_to_worlds = Pc2g[None,:3, ...]
         with torch.no_grad():
-            image_rgb = self.pipeline.model.get_outputs_for_camera(camera, obb_box=None)["rgb"]
-
+            image = self.pipeline.model.get_outputs_for_camera(camera,obb_box=None)
+            image_rgb = image["rgb"]
+            image_dpt = image["depth"]
+        
         # Convert to output image
         image_rgb = image_rgb.cpu().numpy()             # Convert to numpy
         image_rgb = (255*image_rgb).astype(np.uint8)    # Convert to uint8
 
-        return image_rgb
+        image_dpt = image_dpt.cpu().numpy()             # Convert to numpy
+        image_dpt = (255*image_dpt).astype(np.uint8)    # Convert to uint8
+
+        return image_rgb, image_dpt
