@@ -4,7 +4,7 @@ import numpy as np
 import figs.utilities.config_helper as ch
 import figs.utilities.transform_helper as th
 import figs.utilities.orientation_helper as oh
-import figs.dynamics.quadcopter_model as qm
+import figs.dynamics.quadcopter_rate_model as qrm
 import figs.dynamics.quadcopter_specifications as qs
 
 from acados_template import AcadosSimSolver, AcadosSim
@@ -53,7 +53,7 @@ class Simulator:
         sim_json = 'figs_sim_solver.json'
 
         sim = AcadosSim()
-        sim.model = qm.export_model()
+        sim.model = qrm.export_model()
         sim.parameter_values = np.zeros(sim.model.p.shape)
         sim.solver_options.T = 1/rollout["frequency"]
         sim.solver_options.integrator_type = 'IRK'

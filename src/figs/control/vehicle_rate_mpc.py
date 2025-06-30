@@ -5,9 +5,8 @@ import numpy as np
 import scipy.linalg
 import figs.utilities.config_helper as ch
 import figs.utilities.transform_helper as th
-import figs.dynamics.quadcopter_model as qm
+import figs.dynamics.quadcopter_rate_model as qrm
 
-from pathlib import Path
 from casadi import vertcat
 from acados_template import AcadosOcp, AcadosOcpSolver
 from figs.control.base_controller import BaseController
@@ -110,7 +109,7 @@ class VehicleRateMPC(BaseController):
         # Initialize Acados OCP
         ocp = AcadosOcp()
 
-        ocp.model = qm.export_model()        
+        ocp.model = qrm.export_model()        
         ocp.parameter_values = np.zeros(ocp.model.p.shape)
         ocp.model.cost_y_expr = vertcat(ocp.model.x, ocp.model.u)
         ocp.model.cost_y_expr_e = ocp.model.x
