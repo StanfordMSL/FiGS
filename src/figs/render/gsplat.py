@@ -24,7 +24,7 @@ class GSplat():
 
         # Some useful intermediate variables
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        Tw2g = np.array([
+        Tgl2cv = np.array([
             [ 1.00, 0.00, 0.00, 0.00],
             [ 0.00,-1.00, 0.00, 0.00],
             [ 0.00, 0.00,-1.00, 0.00],
@@ -34,7 +34,7 @@ class GSplat():
         # Class variables
         self.device = device
         self.config,self.pipeline, _, _ = eval_setup(gsplat_path,test_mode="inference")
-        self.Tw2g = Tw2g
+        self.Tgl2cv = Tgl2cv
 
     def generate_output_camera(self, camera_config:Dict[str,Union[int,float]]) -> Cameras:
         """
@@ -82,11 +82,11 @@ class GSplat():
         """
 
         # Extract the camera to gsplat pose
-        Tc2g = self.Tw2g@T_c2w
-        Pc2g = torch.tensor(Tc2g[0:3,:]).float()
+        T_c2w_gl = self.Tgl2cv@T_c2w@self.Tgl2cv            # Convert transform from OpenCV to OpenGL convention
+        P_c2w = torch.tensor(T_c2w_gl[0:3,:]).float()       # Extract R|t
 
         # Render rgb image from the pose
-        camera.camera_to_worlds = Pc2g[None,:3, ...]
+        camera.camera_to_worlds = P_c2w[None,:3, ...]
         with torch.no_grad():
             image = self.pipeline.model.get_outputs_for_camera(camera,obb_box=None)
             image_rgb = image["rgb"]

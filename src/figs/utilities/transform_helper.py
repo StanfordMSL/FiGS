@@ -81,6 +81,48 @@ def fo_to_xu(fo:np.ndarray,m:float,kt:float,
 
     return xu
 
+def x_to_R(x:np.ndarray) -> np.ndarray:
+    """
+    Extracts and computes rotation matrix from state vector.
+
+    Args:
+        x:      State vector
+
+    Returns:
+        R:      Rotation matrix
+    """
+
+    # Extract quaternion from state vector
+    q = x[6:10]
+
+    # Compute rotation matrix from quaternion
+    R = Rotation.from_quat(q).as_matrix()
+
+    return R
+
+def u_to_W(u:np.ndarray) -> np.ndarray:
+    """
+    Extracts and computes the cross-product matrix from control input vector.
+
+    Args:
+        u:      Control input vector
+
+    Returns:
+        W:      Cross-product matrix
+    """
+
+    # Extract the body rates
+    wx,wy,wz = u[1:4]
+
+    # Assemble the matrix
+    W = np.array([
+        [0, -wz, wy],
+        [wz, 0, -wx],
+        [-wy, wx, 0]
+    ])
+
+    return W
+
 def x_to_fo(x:np.ndarray,Nfo:int=4,Ndr:int=5) -> np.ndarray:
     """
     Converts a state vector to flat output vector.
