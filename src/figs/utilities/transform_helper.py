@@ -95,7 +95,6 @@ def x_to_R(x:np.ndarray) -> np.ndarray:
     # Extract quaternion from state vector
     q = x[6:10]
 
-    # Compute rotation matrix from quaternion
     R = Rotation.from_quat(q).as_matrix()
 
     return R
@@ -301,8 +300,8 @@ def TpCP_to_TsFO(Tp:np.ndarray,CP:np.ndarray,
     return Ts,FO
 
 def TsFO_to_tXU(Ts:np.ndarray,FO:np.ndarray,
-                m:float,kt:float,
-                fext:ExternalForces|None,
+                m:float=None,kt:float=None,
+                fext:ExternalForces|None=None,
                 n_mtr:int=4,ndim:int=15) -> np.ndarray:
     """
     Converts a sequence of trajectory sequence times and flat outputs to a state
@@ -324,6 +323,10 @@ def TsFO_to_tXU(Ts:np.ndarray,FO:np.ndarray,
     # Initialize output variables
     N = FO.shape[0]
     tXU = np.zeros((N,ndim))
+
+    # Handle the case where mass and thrust coefficients are unknown
+    m = 1.0 if m is None else m
+    kt = 7.0 if kt is None else kt
 
     # Compute flat outputs
     for k in range(N):

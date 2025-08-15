@@ -1,5 +1,5 @@
 from acados_template import AcadosModel
-from casadi import SX,vertcat
+from casadi import SX,vertcat,horzcat
 
 def export_model() -> AcadosModel:
 
@@ -99,3 +99,60 @@ def export_model() -> AcadosModel:
 
     return model
 
+def extract_pixel_states(model: AcadosModel, params: dict) -> SX:
+    """
+    Extracts the pixel states from the full state vector.
+    
+    Args:
+        x (SX): Full state vector.
+        
+    Returns:
+        SX: Pixel states (px, py, pz).
+    """
+    # set up states (x)
+    pt_x = SX.sym('pt_x')
+    pt_y = SX.sym('pt_y')
+    pt_z = SX.sym('pt_z')
+
+    pt_w = vertcat(pt_x, pt_y, pt_z)
+
+    # Extract some useful variables
+    fx,fy,cx,cy = params['fx'], params['fy'], params['cx'], params['cy']
+    Tb2c = params['Tb2c']
+
+    pb_w = vertcat(model.x[0], model.x[1], model.x[2])
+    vb_w = vertcat(model.x[3], model.x[4], model.x[5])
+    qx,qy,qz,qw = model.x[6],model.x[7],model.x[8],model.x[9]
+    wx,wy,wz = model.u[1],model.u[2],model.u[3]
+
+    Rb2c = Tb2c[:3,:3]
+    pb_c = Tb2c[0:3,3]
+
+    # Compute rotation matrix from quaternion
+    Rb2w = vertcat(
+        horzcat(1-2*(qy**2+qz**2), 2*(qx*qy-qw*qz), 2*(qx*qz+qw*qy)),
+        horzcat(2*(qx*qy+qw*qz), 1-2*(qx**2+qz**2), 2*(qy*qz-qw*qx)),
+        horzcat(2*(qx*qz-qw*qy), 2*(qy*qz+qw*qx), 1-2*(qx**2+qy**2))
+    )
+    Rw2b = Rb2w.T
+
+    # Compute the skew-symmetric matrix
+    Wss = vertcat(
+        horzcat(0, -wz, wy),
+        horzcat(wz, 0, -wx),
+        horzcat(-wy, wx, 0)
+    )
+
+    # Compute the pixel states
+    pt_b = Rw2b@(pt_w-pb_w)             # Target in body frame
+    pt_c = Rb2c@(pt_b-pb_c)             # Target in camera frame
+    vt_c = -Rb2c@(Rw2b@vb_w + Wss@pt_b) # Velocity in camera frame
+
+    u = fx * pt_c[0] / pt_c[2] + cx
+    v = fy * pt_c[1] / pt_c[2] + cy
+    ud = fx*(vt_c[0]*pt_c[2]-pt_c[0]*vt_c[2]) / (pt_c[2]**2)
+    vd = fy*(vt_c[1]*pt_c[2]-pt_c[1]*vt_c[2]) / (pt_c[2]**2)
+
+    s = vertcat(u,v,ud,vd)
+    
+    return s,pt_w
