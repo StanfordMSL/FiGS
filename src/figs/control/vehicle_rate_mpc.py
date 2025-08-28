@@ -111,6 +111,7 @@ class VehicleRateMPC(BaseController):
 
         ocp.model = qrm.export_model()        
         ocp.parameter_values = np.zeros(ocp.model.p.shape)
+        
         ocp.model.cost_y_expr = vertcat(ocp.model.x, ocp.model.u)
         ocp.model.cost_y_expr_e = ocp.model.x
 
@@ -227,7 +228,7 @@ class VehicleRateMPC(BaseController):
 
         # Get desired trajectory
         ydes = self.get_ydes(tcr,xcr)
-        
+
         # Get external forces
         self.p[2:5] = self.fex.get_forces(xcr[0:6])
 
