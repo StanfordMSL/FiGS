@@ -1,6 +1,6 @@
 import numpy as np
 from acados_template import AcadosModel
-from casadi import SX,vertcat,horzcat,simplify
+from casadi import SX,vertcat,horzcat,simplify,exp,norm_2
 
 def export_model() -> AcadosModel:
 
@@ -136,7 +136,7 @@ def extract_homing_variables(model:AcadosModel, pt_w:np.ndarray, Tb2c:np.ndarray
     
     # Compute the pixel states
     pt_b = Rw2b@(pt_w-pb_w)              # Target in body frame
-    pt_c = Rb2c@pt_b + pb_c               # Target in camera frame
+    pt_c = Rb2c@pt_b + pb_c              # Target in camera frame
     l_c = -Rb2c@(Rw2b@vb_w+Wb@pt_b)      # Line of sight velocity in camera frame
     
     fx,fy,cx,cy = 462.956,463.002,323.076,181.184
@@ -154,18 +154,25 @@ def extract_homing_variables(model:AcadosModel, pt_w:np.ndarray, Tb2c:np.ndarray
     ud = ud/un
     vd = vd/vn
 
+    # Sigmoid the boi
+    dist = norm_2(pt_w-pb_w)
+    Kfr = 1/(1+exp(-3.68*(dist-1.75)))
+    Knr = 1/(1e-3+1+exp( 1.50*(dist-2.50)))
+
     # Pack the output
-    uv_p = vertcat(u,v)
-    uv_v = vertcat(ud,vd)
+    p_px = vertcat(u,v)
+    v_px = vertcat(ud,vd)
     y_expr = vertcat(
-        pt_b,vb_b,
-        uv_p,
-        uv_v,
+        pt_b,
+        vb_b,
+        p_px,
+        v_px,
         model.u
         )
     y_expr_e = vertcat(
-        pt_b,vb_b,
-        uv_p
+        pt_b,
+        vb_b,
+        p_px
         )
 
     return y_expr, y_expr_e
