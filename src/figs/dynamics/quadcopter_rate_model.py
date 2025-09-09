@@ -135,7 +135,8 @@ def extract_homing_variables(model:AcadosModel, pt_w:np.ndarray, Tb2c:np.ndarray
     vb_b = Rw2b@vb_w
     
     # Compute the pixel states
-    pt_b = Rw2b@(pt_w-pb_w)              # Target in body frame
+    rt_w = pt_w - pb_w               # Target in world frame
+    pt_b = Rw2b@(rt_w)              # Target in body frame
     pt_c = Rb2c@pt_b + pb_c              # Target in camera frame
     l_c = -Rb2c@(Rw2b@vb_w+Wb@pt_b)      # Line of sight velocity in camera frame
     
@@ -147,21 +148,16 @@ def extract_homing_variables(model:AcadosModel, pt_w:np.ndarray, Tb2c:np.ndarray
     vd = fy*(l_c[1]*pt_c[2]-pt_c[1]*l_c[2])/pt_c[2]**2
 
     # Normalize pixel coordinates to [-1,1] from [0,640]x[0,360], and z to [0,6]m
-    un,vn = 320,180
+    uG,vG = 320,180
 
-    u = (u-un)/un
-    v = (v-vn)/vn
-    ud = ud/un
-    vd = vd/vn
-
-    # Sigmoid the boi
-    dist = norm_2(pt_w-pb_w)
-    Kfr = 1/(1+exp(-3.68*(dist-1.75)))
-    Knr = 1/(1e-3+1+exp( 1.50*(dist-2.50)))
+    un = (u-uG)/uG
+    vn = (v-vG)/vG
+    und = ud/uG
+    vnd = vd/vG
 
     # Pack the output
-    p_px = vertcat(u,v)
-    v_px = vertcat(ud,vd)
+    p_px = vertcat(un,vn)
+    v_px = vertcat(und,vnd)
     y_expr = vertcat(
         pt_b,
         vb_b,
