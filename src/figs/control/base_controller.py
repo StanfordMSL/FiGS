@@ -50,6 +50,7 @@ class BaseController(ABC):
 
         Returns:
             ucr: Controller output.
+            aux: Dictionary containing auxiliary information.
             tsol: Dictionary containing the solve times.
         """
         pass

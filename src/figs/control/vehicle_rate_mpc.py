@@ -217,6 +217,7 @@ class VehicleRateMPC(BaseController):
 
         Returns:
             - ucr:  Control input.
+            - aux:  Auxiliary information (empty dictionary).
             - tsol: Solve times dictionary with keys "setup_ocp" and "solve_ocp".
         """
 
@@ -272,7 +273,7 @@ class VehicleRateMPC(BaseController):
                 "solve_ocp":t2-t1
                 }
 
-        return ucr,tsol
+        return ucr,None,tsol
 
     def get_ydes(self,tcr:float,xcr:np.ndarray) -> np.ndarray:
         """
