@@ -1,6 +1,11 @@
 import numpy as np
 from acados_template import AcadosModel
-from casadi import SX,vertcat,horzcat,simplify,exp,norm_2
+from casadi import (
+    SX,
+    exp,fmin,fmax,
+    vertcat,horzcat,
+    norm_1,norm_2
+)
 
 def export_model() -> AcadosModel:
 
@@ -100,17 +105,25 @@ def export_model() -> AcadosModel:
 
     return model
 
-def extract_homing_variables(model:AcadosModel, pt_w:np.ndarray, Tb2c:np.ndarray) -> tuple[SX, SX]:
+def extract_homing_variables(model:AcadosModel, pt_w:np.ndarray, frame:dict) -> tuple[SX, SX]:
     """
     Extracts the pixel states from the full state vector.
     
     """
 
     # Extract some useful variables
+    Tc2b = np.array(frame['camera_to_body_transform'])
+    camera = frame['camera']
+
     pb_w = vertcat(model.x[0], model.x[1], model.x[2])
     vb_w = vertcat(model.x[3], model.x[4], model.x[5])
     qx,qy,qz,qw = model.x[6],model.x[7],model.x[8],model.x[9]
     wx,wy,wz = model.u[1],model.u[2],model.u[3]
+
+    # Precompute some useful variables
+    Tb2c = np.linalg.inv(Tc2b)
+    fx,fy,cx,cy = camera['fx'],camera['fy'],camera['cx'],camera['cy']
+    uG,vG = camera['width']/2,camera['height']/2
 
     # Extract transforms
     Rb2c = Tb2c[:3,:3]
@@ -134,26 +147,28 @@ def extract_homing_variables(model:AcadosModel, pt_w:np.ndarray, Tb2c:np.ndarray
     # Body frame velocities
     vb_b = Rw2b@vb_w
     
-    # Compute the pixel states
-    rt_w = pt_w - pb_w               # Target in world frame
-    pt_b = Rw2b@(rt_w)              # Target in body frame
-    pt_c = Rb2c@pt_b + pb_c              # Target in camera frame
-    l_c = -Rb2c@(Rw2b@vb_w+Wb@pt_b)      # Line of sight velocity in camera frame
-    
-    fx,fy,cx,cy = 462.956,463.002,323.076,181.184
-    u = fx * pt_c[0] / pt_c[2] + cx
-    v = fy * pt_c[1] / pt_c[2] + cy
+    # Compute camera frame states
+    rt_w = pt_w - pb_w                  # Target in world frame
+    pt_b = Rw2b@(rt_w)                  # Target in body frame
+    pt_c = Rb2c@pt_b + pb_c             # Target in camera frame
+    l_c = -Rb2c@(Rw2b@vb_w+Wb@pt_b)     # Line of sight velocity in camera frame
+        
+    # Project into pixels with asserted forward
+    u = (fx*pt_c[0]/(pt_c[2]+1e-5)) + cx
+    v = (fy*pt_c[1]/(pt_c[2]+1e-5)) + cy
+    # u = (fx*pt_c[0]/fmax(0.1,pt_c[2])) + cx
+    # v = (fy*pt_c[1]/fmax(0.1,pt_c[2])) + cy
 
-    ud = fx*(l_c[0]*pt_c[2]-pt_c[0]*l_c[2])/pt_c[2]**2
-    vd = fy*(l_c[1]*pt_c[2]-pt_c[1]*l_c[2])/pt_c[2]**2
+    # Pixel velocities
+    ud = fx*(l_c[0]*pt_c[2]-pt_c[0]*l_c[2])/(pt_c[2]**2+1e-5)
+    vd = fy*(l_c[1]*pt_c[2]-pt_c[1]*l_c[2])/(pt_c[2]**2+1e-5)
 
     # Normalize pixel coordinates to [-1,1] from [0,640]x[0,360], and z to [0,6]m
-    uG,vG = 320,180
+    un,vn = (u-uG)/uG,(v-vG)/vG
+    und,vnd = ud/uG,vd/vG
 
-    un = (u-uG)/uG
-    vn = (v-vG)/vG
-    und = ud/uG
-    vnd = vd/vG
+    # un = fmin(fmax(un,-2.0),2.0)
+    # vn = fmin(fmax(vn,-1.0),1.0)
 
     # Pack the output
     p_px = vertcat(un,vn)

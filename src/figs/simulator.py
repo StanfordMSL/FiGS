@@ -162,6 +162,7 @@ class Simulator:
 
         # Trajectory Rollout Variables
         Tro,Xro,Uro = np.zeros((Nctl+1)),np.zeros((Nctl+1,nx)),np.zeros((Nctl,nu))
+        Mro = np.zeros((Nctl))
         Wro = np.zeros((Nctl,nw))
         Rgb = np.zeros(((Nctl,) + rgb_dim),dtype=np.uint8)
         Dpt = np.zeros(((Nctl,) + dpt_dim),dtype=np.uint8)
@@ -192,11 +193,12 @@ class Simulator:
                 xsn[6:10] = oh.obedient_quaternion(xsn[6:10],xpr[6:10])
 
                 # Generate controller command
-                ucr,tsol = policy.control(tcr,xsn,ucr,rgb,dpt,fts)
+                ucr,mro,tsol = policy.control(tcr,xsn,ucr,rgb,dpt,fts)
 
                 # Log data
                 k = i//n_sim2ctl
                 Tro[k],Xro[k,:],Uro[k,:] = tcr,xcr,ucr
+                Mro[k] = mro
                 Wro[k,0:3] = fcr
                 Rgb[k,:,:,:],Dpt[k,:,:,:] = rgb,dpt
                 Tsol[k] = sum(tsol.values())
@@ -215,4 +217,4 @@ class Simulator:
         Tro[Nctl] = t0+Nsim/hz_sim
         Xro[Nctl,:] = xcr
 
-        return Tro,Xro,Uro,Wro,Rgb,Dpt,Tsol
+        return Tro,Xro,Uro,Mro,Wro,Rgb,Dpt,Tsol

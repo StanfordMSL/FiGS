@@ -50,7 +50,7 @@ class BaseController(ABC):
 
         Returns:
             ucr: Controller output.
-            aux: Dictionary containing auxiliary information.
+            mcr: Current mode.
             tsol: Dictionary containing the solve times.
         """
         pass
@@ -66,7 +66,13 @@ class BaseController(ABC):
         """
         
         pass
-
+    
+    def reset_controller(self) -> None:
+        """
+        Method to reset the controller variables.
+        """
+        pass
+    
     def update_frame(self,frame:str|dict) -> None:
         """
         Method to update the frame related variables of the controller.
@@ -76,3 +82,5 @@ class BaseController(ABC):
 
         """
         pass
+
+    

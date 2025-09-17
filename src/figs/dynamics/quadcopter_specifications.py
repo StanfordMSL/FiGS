@@ -3,7 +3,7 @@ from typing import Dict,Union
 
 def generate_specifications(
         drn_prms:Dict[str,Union[float,np.ndarray]],
-        name:str='the_shepherd',nx:int=10,nu:int=4
+        name:str='the_shepherd'
         ) -> Dict["str",Union[str,int,float,np.ndarray]]:
     """
     Generate a dictionary with the full drone specifications. Some drone specifications are derived
@@ -59,9 +59,11 @@ def generate_specifications(
     """
 
     # Unpack the params dictionary ===========================================
+    g_vec = drn_prms["gravity_vector"]
     m,Impp = drn_prms["mass"],drn_prms["massless_inertia"]
     lf,lb = drn_prms["arm_front"],drn_prms["arm_back"]
     kt,kq = drn_prms["motor_thrust_coeff"],drn_prms["motor_torque_coeff"]
+    nx,nu = drn_prms["nx"],drn_prms["nu"]
     Nrtr = drn_prms["number_of_rotors"]
     Tc2b = drn_prms["camera_to_body_transform"]
     camera = drn_prms["camera"]
@@ -79,7 +81,7 @@ def generate_specifications(
     quad["lf"] = np.array(lf)
     quad["lb"] = np.array(lb)
     quad["kt"],quad["kq"] = kt, kq
-    quad["g"] = 9.81
+    quad["g"] = g_vec[2]
     
     # Model Constants
     quad["nx"],quad["nu"] = nx,nu

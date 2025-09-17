@@ -1,11 +1,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
-import figs.utilities.transform_helper as th
 
 from scipy.spatial.transform import Rotation as R
-from typing import Union,Tuple,List
 
-def plot_tXU_3D(tXUs:Union[np.ndarray,List[np.ndarray]],
+def plot_tXU_3D(tXUs:np.ndarray|list[np.ndarray],
                      n_fr:int=None) -> None:
     """
     Plot the spatial trajectory.
@@ -17,7 +15,7 @@ def plot_tXU_3D(tXUs:Union[np.ndarray,List[np.ndarray]],
     """
 
     # Some useful constants
-    traj_colors:List[str]=["red","green","blue","orange","purple","brown","pink","gray","olive","cyan"]
+    traj_colors:list[str]=["red","green","blue","orange","purple","brown","pink","gray","olive","cyan"]
 
     # Capture case where only one tXU is passed
     if isinstance(tXUs, np.ndarray):
@@ -53,7 +51,7 @@ def plot_tXU_3D(tXUs:Union[np.ndarray,List[np.ndarray]],
 
     plt.show(block=False)
 
-def plot_tXU_time(tXUs:Union[np.ndarray,List[np.ndarray]]) -> None:
+def plot_tXU_time(tXUs:np.ndarray|list[np.ndarray]) -> None:
     """
     Plot the time trajectory.
 
@@ -111,7 +109,7 @@ def plot_tXU_time(tXUs:Union[np.ndarray,List[np.ndarray]]) -> None:
     plt.tight_layout()
     plt.show(block=False)
 
-def get_plot_limits(tXUs:List[np.ndarray],use_aesthetics:bool=True,
+def get_plot_limits(tXUs:list[np.ndarray],use_aesthetics:bool=True,
                     pz_aesth:np.ndarray=np.array([0.0,-2.0]),
                     pxy_min_aesth:float=2.0,
                     pq_aesth:np.ndarray=np.array([-1.0,1.0]),

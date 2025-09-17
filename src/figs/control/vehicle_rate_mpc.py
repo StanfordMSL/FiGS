@@ -198,6 +198,22 @@ class VehicleRateMPC(BaseController):
         self.p[0],self.p[1] = m,kt
         self.tXUd = tXUd
 
+    def reset_controller(self) -> None:
+        """
+        Method to reset the solver of the controller.
+        """
+
+        for i in range(self.solver.acados_ocp.dims.N):
+            lam = self.solver.get(i,"lam")
+            pi = self.solver.get(i,"pi")
+
+            self.solver.set(i,"lam",0.0*lam)
+            self.solver.set(i,"pi",0.0*pi)
+            self.solver.set(i,"x",self.tXUd[i,1:11])
+            self.solver.set(i,"u",self.tXUd[i,11:15])
+
+        self.solver.set(self.solver.acados_ocp.dims.N, "x", self.tXUd[-1,1:11])
+
     def control(self,tcr:float,xcr:np.ndarray,upr:np.ndarray=None,
                 rgb:np.ndarray=None,dpt:np.ndarray=None,
                 fcr:np.ndarray=np.array([0.0,0.0,0.0,0.0,0.0,0.0])
@@ -217,7 +233,7 @@ class VehicleRateMPC(BaseController):
 
         Returns:
             - ucr:  Control input.
-            - aux:  Auxiliary information (empty dictionary).
+            - mcr:  Current mode (always 0).
             - tsol: Solve times dictionary with keys "setup_ocp" and "solve_ocp".
         """
 
@@ -273,7 +289,7 @@ class VehicleRateMPC(BaseController):
                 "solve_ocp":t2-t1
                 }
 
-        return ucr,None,tsol
+        return ucr,0,tsol
 
     def get_ydes(self,tcr:float,xcr:np.ndarray) -> np.ndarray:
         """
