@@ -3,6 +3,7 @@ Helper functions for transforms.
 """
 
 import numpy as np
+
 import figs.utilities.polynomial_helper as ph
 import figs.utilities.orientation_helper as oh
 
@@ -533,3 +534,19 @@ def x_to_T(xcr:np.ndarray) -> np.ndarray:
     Tcr[0:3,3] = xcr[0:3]
 
     return Tcr
+
+def quaternion_to_yawH(qx:float,qy:float,qz:float,qw:float) -> float:
+    """
+    Converts a quaternion to a yaw heading.
+
+    Args:
+        - qx,qy,qz,qw: Quaternion components.
+        - use_casadi:   Use casadi version.
+
+    Returns:
+        - yawH: Yaw heading.
+    """
+
+    yawH = np.arctan2(2*(qw*qz + qx*qy), 1-2*(qy*qy + qz*qz))
+
+    return yawH

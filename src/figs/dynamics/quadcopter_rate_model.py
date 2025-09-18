@@ -3,6 +3,7 @@ from acados_template import AcadosModel
 from casadi import (
     SX,
     exp,fmin,fmax,
+    sin,cos,atan2,
     vertcat,horzcat,
     norm_1,norm_2
 )
@@ -122,8 +123,6 @@ def extract_homing_variables(model:AcadosModel, pt_w:np.ndarray, frame:dict) -> 
 
     # Precompute some useful variables
     Tb2c = np.linalg.inv(Tc2b)
-    fx,fy,cx,cy = camera['fx'],camera['fy'],camera['cx'],camera['cy']
-    uG,vG = camera['width']/2,camera['height']/2
 
     # Extract transforms
     Rb2c = Tb2c[:3,:3]
@@ -143,7 +142,7 @@ def extract_homing_variables(model:AcadosModel, pt_w:np.ndarray, frame:dict) -> 
         horzcat(2.0*(qx*qz-qw*qy), 2.0*(qy*qz+qw*qx), 1.0-2.0*(qx**2+qy**2))
     )
     Rw2b = Rb2w.T
-    
+
     # Body frame velocities
     vb_b = Rw2b@vb_w
     
@@ -151,39 +150,32 @@ def extract_homing_variables(model:AcadosModel, pt_w:np.ndarray, frame:dict) -> 
     rt_w = pt_w - pb_w                  # Target in world frame
     pt_b = Rw2b@(rt_w)                  # Target in body frame
     pt_c = Rb2c@pt_b + pb_c             # Target in camera frame
-    l_c = -Rb2c@(Rw2b@vb_w+Wb@pt_b)     # Line of sight velocity in camera frame
-        
-    # Project into pixels with asserted forward
-    u = (fx*pt_c[0]/(pt_c[2]+1e-5)) + cx
-    v = (fy*pt_c[1]/(pt_c[2]+1e-5)) + cy
-    # u = (fx*pt_c[0]/fmax(0.1,pt_c[2])) + cx
-    # v = (fy*pt_c[1]/fmax(0.1,pt_c[2])) + cy
+    vt_c = -Rb2c@(vb_b+Wb@pt_b)         # Target velocity in camera frame
+  
+    # Compute orientation metrics
+    head = atan2(2*(qw*qz + qx*qy), 1-2*(qy*qy + qz*qz))
+    azim = atan2(pt_c[0],pt_c[2])
+    elev = atan2(pt_c[1],pt_c[2])
+    azim_d = (pt_c[2]*vt_c[0] - pt_c[0]*vt_c[2])/(pt_c[0]**2 + pt_c[2]**2 + 1e-5)
+    elev_d = (pt_c[2]*vt_c[1] - pt_c[1]*vt_c[2])/(pt_c[1]**2 + pt_c[2]**2 + 1e-5)
 
-    # Pixel velocities
-    ud = fx*(l_c[0]*pt_c[2]-pt_c[0]*l_c[2])/(pt_c[2]**2+1e-5)
-    vd = fy*(l_c[1]*pt_c[2]-pt_c[1]*l_c[2])/(pt_c[2]**2+1e-5)
+    ratt = vertcat(azim,elev)
+    datt = vertcat(azim_d,elev_d)
 
-    # Normalize pixel coordinates to [-1,1] from [0,640]x[0,360], and z to [0,6]m
-    un,vn = (u-uG)/uG,(v-vG)/vG
-    und,vnd = ud/uG,vd/vG
-
-    # un = fmin(fmax(un,-2.0),2.0)
-    # vn = fmin(fmax(vn,-1.0),1.0)
-
-    # Pack the output
-    p_px = vertcat(un,vn)
-    v_px = vertcat(und,vnd)
+    # Assemble cost function variables
     y_expr = vertcat(
         pt_b,
         vb_b,
-        p_px,
-        v_px,
+        head,
+        ratt,
+        datt,
         model.u
         )
     y_expr_e = vertcat(
         pt_b,
         vb_b,
-        p_px
+        head,
+        ratt
         )
 
     return y_expr, y_expr_e
