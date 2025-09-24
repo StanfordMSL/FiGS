@@ -1,7 +1,4 @@
 import numpy as np
-import torch
-import json
-
 from pathlib import Path
 from abc import ABC, abstractmethod
 
@@ -55,24 +52,14 @@ class BaseController(ABC):
         """
         pass
 
-    def reset_memory(self,x0:np.ndarray,u0:np.ndarray=None,
-                     fts0=None,pch0=None) -> None:
-        """
-        Method to reset the memory of the controller.
-
-        Args:
-            - x0: Initial state.
-
-        """
-        
-        pass
-    
+    @abstractmethod
     def reset_controller(self) -> None:
         """
         Method to reset the controller variables.
         """
         pass
     
+    @abstractmethod
     def update_frame(self,frame:str|dict) -> None:
         """
         Method to update the frame related variables of the controller.
@@ -81,6 +68,7 @@ class BaseController(ABC):
             - frame: Config Dict of the (drone) frame.
 
         """
+        
         pass
 
     

@@ -13,15 +13,15 @@ from figs.control.base_controller import BaseController
 from figs.dynamics.external_forces import ExternalForces
 from figs.tsplines.min_time_snap import MinTimeSnap
 
-class VehicleRateMPC(BaseController):
+class RatePolynomial(BaseController):
     def __init__(self,
                  policy:str|dict,course:str|dict,frame:str|dict=None,
                  use_RTI:bool=False,
-                 name:str="vrmpc") -> None:
+                 name:str="rate_polynomial") -> None:
         
         """
-        Constructor for the VehicleRateMPC class.
-        
+        Constructor for the RatePolynomial class.
+
         Args:
             - policy:       Config Dict of the policy.
             - course:       Config Dict of the course.
@@ -30,8 +30,8 @@ class VehicleRateMPC(BaseController):
             - name:         Name of the controller.
 
         Variables:
-            -  name:         Name of the controller.
-            -  hz:           Frequency of the controller.
+            -  name:        Name of the controller.
+            -  hz:          Frequency of the controller.
             -  Nx:          Number of states.
             -  Nu:          Number of inputs.
             -  Tsd:         Desired trajectory.
@@ -219,7 +219,7 @@ class VehicleRateMPC(BaseController):
                 fcr:np.ndarray=np.array([0.0,0.0,0.0,0.0,0.0,0.0])
     ) -> tuple[np.ndarray, dict[str,float]]:
         """
-        Method to compute the control input for the VehicleRateMPC controller. We use the standard input arguments
+        Method to compute the control input for the RatePolynomial controller. We use the standard input arguments
         format with the unused arguments set to None. Likewise, we use the standard output format with the unused
         outputs set to None.
 
@@ -280,7 +280,7 @@ class VehicleRateMPC(BaseController):
             try:
                 ucr = self.solver.solve_for_x0(x0_bar=xcr)
             except:
-                print("Warning: VehicleRateMPC failed to solve OCP. Using previous input.")
+                print("Warning: RatePolynomial failed to solve OCP. Using previous input.")
                 ucr = self.solver.get(0, "u")
         t2 = time.time()
 
@@ -332,26 +332,3 @@ class VehicleRateMPC(BaseController):
             ydes = np.vstack((ydes,ypad))
             
         return ydes
-    
-    def reset_memory(self,x0:np.ndarray,u0:np.ndarray=None,
-                     fts0=None,pch0=None) -> None:
-        """
-        Method to reset the memory of the controller. This method is called
-        at the beginning of each trajectory rollout to reset the controller's
-        internal state and prepare it for a new trajectory.
-
-        VehicleRateMPC does not have any internal state to reset, so this
-        method is a no-op. However, it is included to maintain the interface
-        with the BaseController class and to allow for future extensions
-        where internal state might be added.
-        
-        Args:
-            - x0: Initial state.
-            - u0: Initial control input (unused).
-            - fts0: Initial forces (unused).
-            - pch0: Initial perturbations (unused).
-        """
-        # Unpack unused variables
-        _ = x0,u0,fts0,pch0
-        
-        pass

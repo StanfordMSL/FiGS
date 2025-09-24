@@ -159,8 +159,8 @@ def extract_homing_variables(model:AcadosModel, pt_w:np.ndarray, frame:dict) -> 
     azim_d = (pt_c[2]*vt_c[0] - pt_c[0]*vt_c[2])/(pt_c[0]**2 + pt_c[2]**2 + 1e-5)
     elev_d = (pt_c[2]*vt_c[1] - pt_c[1]*vt_c[2])/(pt_c[1]**2 + pt_c[2]**2 + 1e-5)
 
-    ratt = vertcat(azim,elev)
-    datt = vertcat(azim_d,elev_d)
+    ratt = vertcat(azim,elev)           # relative attitude
+    datt = vertcat(azim_d,elev_d)      # derivative of relative attitude
 
     # Assemble cost function variables
     y_expr = vertcat(

@@ -69,9 +69,11 @@ def get_data_description(name:str,value:int, subunits:str=None, Nmn:int=10,Nct:i
     
     return data_desc
 
-def get_deployment_table(mode:Literal["sv","char"]="sv") -> str:
+def get_deployment_table(metrics:dict) -> str:
     """
-    Generate a table header for deployment data.
+    Generate a table header for deployment data. 
+    Args:
+        metrics:    Dictionary containing the metrics data.
     
     Returns:
         table:   Formatted string for the deployment table header.
@@ -82,35 +84,34 @@ def get_deployment_table(mode:Literal["sv","char"]="sv") -> str:
 
     # Add columns
     table.add_column("Pilot", justify="left")
-    if mode == "sv":
-        table.add_column("TTE Mean", justify="center")
-        table.add_column("TTE Best", justify="center")
-        table.add_column("PP", justify="center")
-    elif mode == "char":
-        table.add_column("CTR Mean", justify="center")
-        table.add_column("CTR Best", justify="center")
-        table.add_column("CTT", justify="center")
+    table.add_column(metrics["EvalA"]["name"]+" (mean)", justify="center")
+    table.add_column(metrics["EvalA"]["name"]+" (best)", justify="center")
+    table.add_column(metrics["EvalB"]["name"]+" (mean)", justify="center")
+    table.add_column(metrics["EvalB"]["name"]+" (best)", justify="center")
     table.add_column("Hz Mean", justify="center")
     table.add_column("Hz Worst", justify="center")
 
     return table
 
-def update_deployment_table(table:Table,pilot:str,metrics:dict):
+def update_deployment_table(table:Table|None,pilot:str,metrics:dict):
     """
     Update the deployment table with metrics data.
     
     Args:
-        table:   The deployment table to update.
-        pilot:   Name of the pilot.
+        table:      The deployment table to update (or None to create a new one).
+        pilot:      Name of the pilot.
         metrics:   Dictionary containing the metrics data.
         
     Returns:
         table:   Updated deployment table with metrics.
     """
-    
+
+    # Create a new table if none is provided
+    if table is None:
+        table = get_deployment_table(metrics)
+        
     # Ensure the metrics dictionary has the expected keys
     keys = metrics.keys()
-    assert len(keys) == 3, "Metrics dictionary must contain exactly three keys."
     assert "hz" in keys, "'hz' key must be present in the metrics dictionary."
 
     # Convert keys to a list for indexing
@@ -119,9 +120,10 @@ def update_deployment_table(table:Table,pilot:str,metrics:dict):
     # Add a row with the metrics
     table.add_row(
         pilot,
-        f"{metrics[keys[0]]['mean']:.2f}",
-        f"{metrics[keys[0]]['best']:.2f}",
-        f"{metrics[keys[1]]:.2f}",
+        f"{metrics['EvalA']['mean']:.2f}",
+        f"{metrics['EvalA']['best']:.2f}",
+        f"{metrics['EvalB']['mean']:.2f}",
+        f"{metrics['EvalB']['best']:.2f}",
         f"{metrics['hz']['mean']:.2f}",
         f"{metrics['hz']['worse']:.2f}"
     )
@@ -154,7 +156,7 @@ def get_student_summary(student:str,
     tt_field = f"Test: {loss_tt:.4f}"
 
     if eval_tte is not None:
-        ev_field = f"[bold bright_green]Eval TTE: {eval_tte:.2f}[/]"
+        ev_field = f"[bold bright_green]EvalA: {eval_tte:.2f}[/]"
         eval_field = (f"{t_field:<19} | {tn_field:<35} | {tt_field:<10} | {ev_field}\n")
     else:
         eval_field = (f"{t_field:<19} | {tn_field:<35} | {tt_field:<10}\n")

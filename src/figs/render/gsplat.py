@@ -33,7 +33,7 @@ class GSplat():
 
         # Class variables
         self.device = device
-        self.config,self.pipeline, _, _ = eval_setup(gsplat_path,test_mode="inference")
+        self.config,self.pipeline,_,_ = eval_setup(gsplat_path,test_mode="inference")
         self.Tgl2cv = Tgl2cv
 
     def generate_output_camera(self, camera_config:Dict[str,Union[int,float]]) -> Cameras:
