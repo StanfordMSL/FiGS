@@ -194,7 +194,7 @@ class Simulator:
 
                 # Generate controller command
                 ucr,mro,tsol = policy.control(tcr,xsn,ucr,rgb,dpt,fts)
-
+                
                 # Log data
                 k = i//n_sim2ctl
                 Tro[k],Xro[k,:],Uro[k,:] = tcr,xcr,ucr
