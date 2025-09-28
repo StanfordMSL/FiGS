@@ -2,6 +2,7 @@ import os
 import shutil
 import numpy as np
 import figs.utilities.config_helper as ch
+import figs.utilities.gsplat_helper as gh
 import figs.utilities.transform_helper as th
 import figs.utilities.orientation_helper as oh
 import figs.dynamics.quadcopter_rate_model as qrm
@@ -38,7 +39,7 @@ class Simulator:
 
         # Check if gsplat is a string or GSplat object
         if isinstance(gsplat, str):
-            gsplat = ch.get_gsplat(gsplat)
+            gsplat = gh.get_gsplat(gsplat)
         
         # Check if rollout is a string or dictionary
         if isinstance(method, str):
