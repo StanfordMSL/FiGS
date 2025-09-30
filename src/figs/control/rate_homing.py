@@ -11,6 +11,7 @@ from casadi import Function
 from acados_template import AcadosOcp, AcadosOcpSolver
 from figs.control.base_controller import BaseController
 from figs.dynamics.external_forces import ExternalForces
+from figs.visualize import rich_visuals as rv
 
 from enum import Enum
 
@@ -120,7 +121,6 @@ class RateHoming(BaseController):
 
         # Desired Variables
         fex = ExternalForces(Fs_cfg)                    # External Forces
-
         x0 = th.fo_to_xu(fo0,m,kt,np.zeros(3))[0:10]    # Initial state (assuming no external forces)
         xf = th.fo_to_xu(fof,m,kt,np.zeros(3))[0:10]    # Final state (assuming no external forces)
         uhov = np.array([-m*g/(nmtr*kt),0.0,0.0,0.0])   # Hover command
