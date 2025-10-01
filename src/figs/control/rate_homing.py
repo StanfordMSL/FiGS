@@ -42,30 +42,20 @@ class RateHoming(BaseController):
             -  hz:          Control frequency.
             -  m,kt:        Mass and motor thrust coefficient of the frame.
             -  uhov:        Hover command.
-            -  tXUd:        Desired trajectory (time, state, input).
-            -  yref:        Stagewise cost reference.
-            -  yref_e:      Terminal cost reference.
+            -  tXUd:        Desired trajectory (initial and final points).
             -  Nx,Nu:       Number of states and inputs.
             -  fex:         External forces object.
             -  forces:      Current external forces.
             -  mode:        Current mode of the controller.
-            -  Wka,WNa:     Cost weights for ACQUIRE mode.
-            -  Wkn,WNn:     Cost weights for NAVIGATE mode.
-            -  Wki,WNi:     Cost weights for INTERACT mode.
-            -  tol_a2n:     Tolerance from ACQUIRE to NAVIGATE.
-            -  tol_a2i:     Tolerance from ACQUIRE to INTERACT.
-            -  tol_n2a:     Tolerance from NAVIGATE to ACQUIRE.
-            -  tol_n2i:     Tolerance from NAVIGATE to INTERACT.
-            -  tol_i2a:     Tolerance from INTERACT to ACQUIRE.
-            -  fb_count:    Count of consecutive fallback attempts.
-            -  fb_limit:    Maximum allowed fallback attempts.
-            -  fb_fail:     Flag to indicate if the fallback strategy failed.
-            -  fail_count:  Count of consecutive failures.
+            -  weights:     Weights dictionary.
+            -  tolerances:  Tolerances dictionary.
+            -  fb_count:    Fallback counter.
+            -  fb_limit:    Fallback limit.
+            -  fb_fail:     Fallback failure flag.
             -  K:           Camera intrinsic matrix.
-            -  lbu,ubu:     Lower and upper bounds on inputs.
             -  solver:      Acados OCP solver.
-            -  get_y_expr:  CasADi function to compute stagewise cost expression.
-            -  get_y_expr_e:CasADi function to compute terminal cost expression.
+            -  get_y_expr:  CasADi function to compute the stagewise cost terms.
+            -  get_y_expr_e:CasADi function to compute the terminal cost terms.
             -  debug:       Debug flag.
         """
         # =====================================================================
@@ -95,13 +85,8 @@ class RateHoming(BaseController):
         track = policy["track"]
 
         hz,Nhn = policy["track"]["hz"],policy["track"]["horizon"]
-        weights,tolerances = policy["track"]["weights"],policy["track"]["tolerances"]
-        Wka,WNa = np.diag(weights["Wka"]),np.diag(weights["WNa"])
-        Wkn,WNn = np.diag(weights["Wkn"]),np.diag(weights["WNn"])
-        Wki,WNi = np.diag(weights["Wki"]),np.diag(weights["WNi"])
-        tol_a2n,tol_a2i = tolerances["a2n_angle"],tolerances["a2i_distance"]
-        tol_n2a,tol_n2i = tolerances["n2a_angle"],tolerances["n2i_distance"]
-        tol_i2a = tolerances["i2a_angle"]
+        weights: dict[str,dict[str,dict[str,list]]] = policy["track"]["weights"]
+        tolerances:dict[str,float] = policy["track"]["tolerances"]
         fb_limit = tolerances["fallback_limit"]
 
         lbu,ubu = np.array(track["bounds"]["lower"]),np.array(track["bounds"]["upper"])
@@ -111,7 +96,6 @@ class RateHoming(BaseController):
         g = frame["gravity_vector"][2]
         nx,nu = frame["nx"],frame["nu"]
         nmtr = frame["number_of_rotors"]
-        p_pb = frame["probe_position"]
 
         # Course Parameters
         WPs_cfg,Fs_cfg = course["waypoints"],course["forces"]
@@ -128,18 +112,44 @@ class RateHoming(BaseController):
         txu0 = np.hstack((t0,x0,uhov))                  # Initial trajectory point
         txuf = np.hstack((tf,xf,uhov))                  # Final trajectory point
         tXUd = np.vstack((txu0,txuf))                   # Complete desired trajectory
-
-        vb_ds = np.array([ 0.00, 0.00, 0.00])        # Desired body velocity
-        hd_ds = -1.57                                # Desired heading
-        ra_ds = np.array([ 0.00, 0.00])              # Desired relative attitude
-        da_ds = np.array([ 0.00, 0.00])              # Desired relative attitude rate
-
-        yref = np.hstack((p_pb,vb_ds,hd_ds,ra_ds,da_ds,uhov))   # Stagewise Cost Reference
-        yref_e = np.hstack((p_pb,vb_ds,hd_ds,ra_ds))            # Terminal Cost Reference
         
+        # =====================================================================
+        # Setup Non-Acados Variables
+        # =====================================================================
+
+        # Necessary Variables for Base Controller -----------------------------
+        self.name = name
+        self.hz = hz
+        
+        # Frame Changing Variables (affected by changes in m and kt) ----------
+        self.m,self.kt = m,kt
+        self.uhov = uhov
+        self.tXUd = tXUd
+        self.fof = fof
+        
+        # Controller Specific Variables ---------------------------------------
+        self.debug = debug
+        self.Nx,self.Nu = nx,nu
+        self.fex = fex
+        self.forces = np.zeros(3)
+        self.mode = Mode.ACQUIRE
+        self.weights = weights
+        self.tolerances = tolerances
+        self.fb_count = 0
+        self.fb_limit = fb_limit
+        self.fb_fail = False
+        self.K = np.array([
+            [frame["camera"]["fx"], 0, frame["camera"]["cx"]],
+            [0, frame["camera"]["fy"], frame["camera"]["cy"]],
+            [0, 0, 1]
+        ])
+                
         # =====================================================================
         # Setup Acados Variables
         # =====================================================================
+
+        # Extract cost terms
+        W,We,yref,yref_e = self.get_cost_terms()
 
         # Initialize Acados OCP
         ocp = AcadosOcp()
@@ -154,10 +164,8 @@ class RateHoming(BaseController):
         ocp.cost.cost_type = 'NONLINEAR_LS'
         ocp.cost.cost_type_e = 'NONLINEAR_LS'
 
-        ocp.cost.W = Wka
-        ocp.cost.W_e = WNa
-        ocp.cost.yref = yref
-        ocp.cost.yref_e = yref_e
+        ocp.cost.W,ocp.cost.W_e = W,We
+        ocp.cost.yref,ocp.cost.yref_e = yref,yref_e
 
         ocp.constraints.x0 = x0
         ocp.constraints.lbu = lbu
@@ -186,42 +194,6 @@ class RateHoming(BaseController):
         os.remove(os.path.join(os.getcwd(),"acados_ocp.json"))
         shutil.rmtree(ocp.code_export_directory)
 
-        # =====================================================================
-        # Controller Variables
-        # =====================================================================
-
-        # Necessary Variables for Base Controller -----------------------------
-        self.name = name
-        self.hz = hz
-        
-        # Frame Changing Variables (affected by changes in m and kt) ----------
-        self.m,self.kt = m,kt
-        self.uhov = uhov
-        self.tXUd = tXUd
-        self.yref = yref
-        self.yref_e = yref_e
-
-        # Controller Specific Variables ---------------------------------------
-        self.debug = debug
-        self.Nx,self.Nu = nx,nu
-        self.fex = fex
-        self.forces = np.zeros(3)
-        self.mode = Mode.ACQUIRE
-        self.Wka,self.WNa = Wka,WNa
-        self.Wkn,self.WNn = Wkn,WNn
-        self.Wki,self.WNi = Wki,WNi
-        self.tol_a2n,self.tol_a2i = tol_a2n,tol_a2i
-        self.tol_n2a,self.tol_n2i = tol_n2a,tol_n2i
-        self.tol_i2a = tol_i2a
-        self.fb_count = 0
-        self.fb_limit = fb_limit
-        self.fb_fail = False
-        self.K = np.array([
-            [frame["camera"]["fx"], 0, frame["camera"]["cx"]],
-            [0, frame["camera"]["fy"], frame["camera"]["cy"]],
-            [0, 0, 1]
-        ])
-        self.lbu,self.ubu = lbu,ubu
         self.solver = solver
 
         # Controller Specific Functions --------------------------------------
@@ -233,7 +205,7 @@ class RateHoming(BaseController):
         # =====================================================================
         
         self.reset_controller()
-        
+
     def control(self,tcr:float,xcr:np.ndarray,upr:np.ndarray=None,
                 rgb:np.ndarray=None,dpt:np.ndarray=None,
                 fcr:np.ndarray=np.array([0.0,0.0,0.0,0.0,0.0,0.0])
@@ -286,7 +258,7 @@ class RateHoming(BaseController):
 
                 if self.fb_count >= self.fb_limit:
                     self.fb_fail = True
- 
+
             if self.debug:
                 if self.fb_fail:
                     print("Solver failed main fallback strategy at time:",tcr,". Using hover command.")
@@ -327,6 +299,9 @@ class RateHoming(BaseController):
             self.fb_fail = False
             self.fb_count = 0
 
+        if self.debug:
+            print("Mode reset to mode:",self.mode)
+        
     def update_frame(self,frame:str|dict) -> None:
         """
         Method to update the frame related variables of the controller.
@@ -352,7 +327,6 @@ class RateHoming(BaseController):
         self.uhov = uhov
         self.tXUd[0,11:15] = uhov
         self.tXUd[1,11:15] = uhov   
-        self.yref[9:13] = uhov
 
     def update_state_machine(self,tcr:float,xcr:np.ndarray) -> int:
         """
@@ -368,41 +342,41 @@ class RateHoming(BaseController):
         """
                 
         # Unpack Modes
-        tol_a2n,tol_a2i = self.tol_a2n,self.tol_a2i
-        tol_n2a,tol_n2i = self.tol_n2a,self.tol_n2i
-        tol_i2a = self.tol_i2a
+        tol_int_dst = self.tolerances["interact_distance"]
+        tol_int_npx = self.tolerances["interact_npixels"]
+        tol_nav_npx = self.tolerances["navigate_npixels"]
+        tol_acq_npx = self.tolerances["acquire_npixels"]
 
         # Compute state machine transition variables
-        yf = self.get_y_expr_e(xcr)                     # Current cost states
+        ydict = self.get_cost_values(xcr)                    # Current cost states
 
-        dst = np.linalg.norm(yf[0:3])                   # Distance to target
-        azm,elv = yf[7],yf[8]                           # Azimuth and Elevation to target
+        dst = np.linalg.norm(ydict["pt_p"])                     # Probe to target distance
+        upn,vpn = abs(ydict["uv_n"][0]),abs(ydict["uv_n"][1])   # Normalized pixel coordinates
 
         # Run state machine
         if self.mode == Mode.ACQUIRE:       # MODE: ACQUIRE -------------------------
             # State Transitions
-            if (dst<tol_a2i):
+            if (dst<tol_int_dst and upn<tol_int_npx and vpn<tol_int_npx):
                 self.mode = Mode.INTERACT
                 if self.debug:
                     print("Close to target! Switching to INTERACT Mode at time:",tcr)
-            elif (-tol_a2n<azm<tol_a2n and -tol_a2n<elv<tol_a2n):
+            elif (dst>tol_int_dst and upn<tol_nav_npx and vpn<tol_nav_npx):
                 self.mode = Mode.NAVIGATE
                 if self.debug:
                     print("Target Found! Switching to NAVIGATE Mode at time:",tcr)
         elif self.mode == Mode.NAVIGATE:    # MODE: NAVIGATE ------------------------
             # State Transitions
-            if (dst<tol_n2a):
+            if (dst<tol_int_dst and upn<tol_int_npx and vpn<tol_int_npx):
                 self.mode = Mode.INTERACT
                 if self.debug:
                     print("Close to target! Switching to INTERACT Mode at time:",tcr)
-
-            elif (azm<-tol_n2i or azm>tol_n2i or elv<-tol_n2i or elv>tol_n2i):
+            elif (upn>tol_acq_npx or vpn>tol_acq_npx):
                 self.mode = Mode.ACQUIRE
                 if self.debug:
                     print("Target Lost! Switching to ACQUIRE Mode at time:",tcr)
         elif self.mode == Mode.INTERACT:    # MODE: INTERACT ------------------------
             # State Transitions
-            if (azm<-tol_i2a or azm>tol_i2a or elv<-tol_i2a or elv>tol_i2a):
+            if (upn>tol_acq_npx or vpn>tol_acq_npx):
                 self.mode = Mode.ACQUIRE
                 if self.debug:
                     print("Target Lost! Switching to ACQUIRE Mode at time:",tcr)
@@ -416,12 +390,7 @@ class RateHoming(BaseController):
         """
 
         # Get the relevant cost weights
-        if self.mode == Mode.ACQUIRE:
-            W,We = self.Wka,self.WNa
-        elif self.mode == Mode.NAVIGATE:
-            W,We = self.Wkn,self.WNn
-        elif self.mode == Mode.INTERACT:
-            W,We = self.Wki,self.WNi
+        W,We,yref,yref_e = self.get_cost_terms()
 
         # Assemble the parameter variable
         p = np.hstack((self.m,self.kt,self.forces))
@@ -429,7 +398,91 @@ class RateHoming(BaseController):
         # Update the OCP solver with the new weights and parameters
         for i in range(self.solver.acados_ocp.dims.N):
             self.solver.cost_set(i,"W",W)
+            self.solver.set(i,'yref',yref)
             self.solver.set(i,'p',p)
 
         self.solver.cost_set(self.solver.acados_ocp.dims.N,"W",We)
+        self.solver.set(self.solver.acados_ocp.dims.N,'yref',yref_e)
         self.solver.set(self.solver.acados_ocp.dims.N,'p',p)
+
+    def get_cost_terms(self) -> tuple[np.ndarray,np.ndarray]:
+        """
+        Method to get the current terms of the controller.
+
+        Args:
+            - weights: Weights dictionary. If None, uses the current mode's weights.
+
+        Returns:
+            - W:  Current stagewise weights.
+            - We: Current terminal weights.
+            - yref: Current stagewise cost reference.
+            - yref_e: Current terminal cost reference.
+        """
+
+        # Assemble the weights
+        if self.mode == Mode.ACQUIRE:
+            weights = self.weights["acquire"]
+        elif self.mode == Mode.NAVIGATE:
+            weights = self.weights["navigate"]
+        elif self.mode == Mode.INTERACT:
+            weights = self.weights["interact"]
+
+        stagewise = []
+        for value in weights["stagewise"].values():
+            stagewise.append(value)
+
+        terminal = []
+        for value in weights["terminal"].values():
+            terminal.append(value)
+
+        W = np.diag(np.hstack(stagewise))
+        We = np.diag(np.hstack(terminal))
+
+        # Assemble the references
+        if self.mode == Mode.ACQUIRE:
+            pt_p_ds = np.array([1.0,0.0,0.0])           # Desired probe to target position
+        else:
+            pt_p_ds = np.zeros(3)                       # Desired probe to target position
+        
+        vb_b_ds = np.zeros(3)                           # Desired body velocity
+        head_ds = self.fof[3,0]                         # Desired heading
+        uv_n_ds = np.zeros(2)                           # Desired normalized pixel coordinates
+        ratt_ds = np.zeros(2)                           # Desired normalized pixel coordinates
+        datt_ds = np.zeros(2)                           # Desired relative attitude
+        u_br_ds = self.uhov                             # Desired relative attitude rate
+
+        yref = np.hstack((pt_p_ds,vb_b_ds,head_ds,uv_n_ds,ratt_ds,datt_ds,u_br_ds))     # Stagewise Cost Reference
+        yref_e = np.hstack((pt_p_ds,vb_b_ds,head_ds,uv_n_ds,ratt_ds))                   # Terminal Cost Reference
+        
+        return W,We,yref,yref_e
+    
+    def get_cost_values(self,xcr:np.ndarray,ucr:np.ndarray|None=None) -> dict[str,np.ndarray]:
+        """
+        Method to compute the current stagewise cost terms.
+
+        Args:
+            - xcr: Current state.
+            - ucr: Current input.
+
+        Returns:
+            - ydict: Current stagewise cost terms.
+        """
+    
+        # Extract the relevant cost terms
+        if ucr is None:
+            y_expr:np.ndarray = self.get_y_expr_e(xcr).full().flatten()
+
+            weights = self.weights["acquire"]["terminal"]
+        else:
+            y_expr:np.ndarray = self.get_y_expr(xcr,ucr).full().flatten()
+
+            weights = self.weights["acquire"]["stagewise"]
+
+        # Assemble the cost values dictionary
+        ydict,i = {},0
+        for k,v in weights.items():
+            size = len(v)
+            ydict[k] = y_expr[i:i+size]
+            i += size
+
+        return ydict
