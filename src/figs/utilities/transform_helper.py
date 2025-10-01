@@ -47,6 +47,9 @@ def fo_to_xu(fo:np.ndarray,m:float,kt:float,
     xct = np.array([ np.cos(psit), np.sin(psit), 0.0 ])
     yct = np.array([-np.sin(psit), np.cos(psit), 0.0 ])
     
+    alpha = np.asarray(alpha, dtype=np.float64)
+    yct = np.asarray(yct, dtype=np.float64)
+    
     # Compute Orientation
     xbt = np.cross(alpha,yct)/np.linalg.norm(np.cross(alpha,yct))
     ybt = np.cross(xbt,alpha)/np.linalg.norm(np.cross(xbt,alpha))
