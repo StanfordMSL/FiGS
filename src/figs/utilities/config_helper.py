@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from figs.render.gsplat import GSplat
 
-def get_config(config_name:str, config_type:str,configs_path:Path=None) -> dict: 
+def get_config(config_name:str, config_type:str,configs_path:Path=None) -> dict[str,dict[str,dict|int|float|list[float]]]: 
     """"
     Load a configuration file from the corresponding configs directory.
 
