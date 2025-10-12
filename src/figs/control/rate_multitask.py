@@ -400,7 +400,7 @@ class RateMultitask(BaseController):
 
         # Get the relevant cost weights
         W,We,yref,yref_e = self.get_cost_terms()
-        # print(np.diag(W))
+
         # Assemble the parameter variable
         p = np.hstack((self.m,self.kt,self.forces))
 
@@ -466,7 +466,7 @@ class RateMultitask(BaseController):
         Returns:
             - ydict: Current stagewise cost terms.
         """
-    
+
         # Extract the relevant cost terms
         if ucr is None:
             y_expr:np.ndarray = self.get_y_expr_e(xcr).full().flatten()

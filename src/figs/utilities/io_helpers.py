@@ -6,7 +6,7 @@ import numpy as np
 import figs.utilities.transform_helper as th
 from scipy.spatial.transform import Rotation as R
 
-def compute_prms(frame:dict[str,np.ndarray,str|int|float]) -> list:
+def compute_params(frame:dict[str,np.ndarray,str|int|float]) -> list:
     """
     Computes the frame parameters (mass, thrust coefficient, normalized thrust gain).
 
@@ -30,7 +30,7 @@ def compute_prms(frame:dict[str,np.ndarray,str|int|float]) -> list:
 
     return params
 
-def compute_Wrs(Xro:np.ndarray,Uro:np.ndarray,Wro:np.ndarray,
+def compute_resultants(Xro:np.ndarray,Uro:np.ndarray,Wro:np.ndarray,
              frame:dict[str,np.ndarray,str|int|float],
              bframe:dict[str,np.ndarray,str|int|float]) -> np.ndarray:
     """
@@ -77,7 +77,7 @@ def compute_Wrs(Xro:np.ndarray,Uro:np.ndarray,Wro:np.ndarray,
 
     return Wrs
 
-def compute_FOro(Tro:np.ndarray,Xro:np.ndarray,Uro:np.ndarray,
+def compute_flatoutputs(Tro:np.ndarray,Xro:np.ndarray,Uro:np.ndarray,
                Wro:np.ndarray,frame:dict[str,np.ndarray,str|int|float]) -> np.ndarray:
     """
     Computes the flat output sequence given a trajectory rollout
@@ -103,16 +103,14 @@ def compute_FOro(Tro:np.ndarray,Xro:np.ndarray,Uro:np.ndarray,
 
     return FO
 
-def compute_Lro(Tro:np.ndarray,Xro:np.ndarray,Uro:np.ndarray,
-               pt_w:np.ndarray,frame:dict[str,np.ndarray,str|int|float]) -> np.ndarray:
+def compute_detectors(Tro:np.ndarray,Xro:np.ndarray,Obj:dict[str,dict[str,list[float|int]]],frame:dict[str,np.ndarray,str|int|float]) -> np.ndarray:
     """
     Computes the localization sequence given a trajectory rollout
 
     Args:
         Tro:    Time vector.
         Xro:    State vector.
-        Uro:    Control input vector.
-        pt_w:   Target position in world frame.
+        Obj:    Objects to track.
         frame:  Frame configuration.
     
     Returns:
@@ -120,33 +118,34 @@ def compute_Lro(Tro:np.ndarray,Xro:np.ndarray,Uro:np.ndarray,
     """
 
     # Extract some useful variables
+    Npt,Nbb = 3,4
     Tc2b = np.array(frame['camera_to_body_transform'])
-    pp_b = np.array(frame["probe_position"])
     camera = frame['camera']
     fx,fy = camera["fx"],camera["fy"]
-    nW,nH = camera["width"]/2,camera["height"]/2
+    cx,cy = camera["cx"],camera["cy"]
+    nW,nH = camera["width"],camera["height"]
     Nro = Tro.shape[0]
+    Nobj = len(Obj)
 
+    # Precompute some useful variables
+    Tb2c = np.linalg.inv(Tc2b)
+
+    Rb2c = Tb2c[:3,:3]
+    pb_c = Tb2c[0:3,3].reshape((-1,1))
+
+    # Get object and bounding box positions
+    Pobjs = np.zeros((Nobj,Npt))
+    Pbbxs = np.zeros((Nobj,Nbb,Npt))
+    for i,obj in enumerate(Obj.values()):
+        Pobjs[i,:] = np.array(obj["position"])
+        Pbbxs[i,:,:] = Pobjs[i,:] + np.array(obj["boundary"])
+
+    # Compute bounding boxes
+    Bro = np.zeros((Nro,Nobj,1+Nbb))
     for i in range(Nro):
-        pb_w = Xro[i,0:3]
-        vb_w = Xro[i,3:6]
+        pb_w = Xro[i,0:3].reshape((-1,1))
         qx,qy,qz,qw = Xro[i,6:10]
-        wx,wy,wz = Uro[i,1:4]
 
-        # Precompute some useful variables
-        Tb2c = np.linalg.inv(Tc2b)
-
-        # Extract transforms
-        Rb2c = Tb2c[:3,:3]
-        pb_c = Tb2c[0:3,3]
-
-        # Compute skew symmetric matrix
-        Wb = np.array([
-            [0.0, -wz, wy],
-            [wz, 0.0, -wx],
-            [-wy, wx, 0.0]
-        ])
-        
         # Compute rotation matrix from quaternion
         Rb2w = np.array([
             [1.0-2.0*(qy**2+qz**2), 2.0*(qx*qy-qw*qz), 2.0*(qx*qz+qw*qy)],
@@ -154,36 +153,41 @@ def compute_Lro(Tro:np.ndarray,Xro:np.ndarray,Uro:np.ndarray,
             [2.0*(qx*qz-qw*qy), 2.0*(qy*qz+qw*qx), 1.0-2.0*(qx**2+qy**2)]]
         )
         Rw2b = Rb2w.T
-
-        # Body frame velocities
-        vb_b = Rw2b@vb_w
+        Rw2c = Rb2c@Rw2b
         
-        # Compute camera frame states
-        rt_w = pt_w - pb_w                  # Target in world frame
-        pt_b = Rw2b@(rt_w)                  # Target in body frame
-        pt_p = pt_b - pp_b                  # Target in probe frame
-        pt_c = Rb2c@pt_b + pb_c             # Target in camera frame
-    
-        # Compute orientation metrics
-        head = np.arctan2(2*(qw*qz + qx*qy), 1-2*(qy*qy + qz*qz))
-        azim = np.arctan2(pt_c[0],pt_c[2])
-        elev = np.arctan2(pt_c[1],pt_c[2])
-        u_n = fx*pt_c[0]/(nW*(pt_c[2]+1e-5))
-        v_n = fy*pt_c[1]/(nH*(pt_c[2]+1e-5))
+        # Compute bounding boxes
+        bro = np.zeros_like(Bro[i,:,:])
+        for j in range(Nobj):
+            # Determine object and bounding box in camera frame
+            pobj_w = Pobjs[j,:].reshape((-1,1)) # Object position (3x1)
+            pbbx_w = Pbbxs[j,:,:].T             # Object bounding box (3x4)
+            pob_w = np.hstack((pobj_w,pbbx_w))  # Object + bounding box (3x5)
 
-        # Populate the localization array
-        lro = np.hstack((
-                pb_w,
-                pt_p,
-                vb_b,
-                head,
-                u_n,v_n,
-                azim,elev
-            ))
-        
-        if i == 0:
-            Lro = np.zeros((Nro,lro.shape[0]))
+            rob_w = pob_w - pb_w                # Object + bounding box in world frame (3x5)
+            rob_c = Rw2c@rob_w+pb_c             # Object + bounding box in camera frame (3x5)
+  
+            # Compute the pixel coordinates
+            UVob = np.zeros((2,5))
+            UVob[0,:] = fx*rob_c[0,:]/(rob_c[2,:]+1e-5)+cx
+            UVob[1,:] = fy*rob_c[1,:]/(rob_c[2,:]+1e-5)+cy
 
-        Lro[i,:] = lro
+            # Normalize and account for center crop
+            offset,scale = 16/256,224/256
 
-        return Lro
+            nUVob = np.zeros((2,5))
+            nUVob[0,:] = UVob[0,:]/nW
+            nUVob[1,:] = UVob[1,:]/nH
+            nUVob = (nUVob - offset)/scale
+
+            # Check if object is visible
+            if 0.0 <= nUVob[0,0] <= 1.0 and 0.0 <= nUVob[1,0] <= 1.0 and rob_c[2,0] > 0.0:
+                bro[j,0] = 1.0                                    # Object is visible
+                bro[j,1] = nUVob[0,0]                             # Object center u
+                bro[j,2] = nUVob[1,0]                             # Object center v
+                bro[j,3] = np.max(nUVob[0,:])-np.min(nUVob[0,:])  # Object width
+                bro[j,4] = np.max(nUVob[1,:])-np.min(nUVob[1,:])  # Object height
+            
+        # Store the bounding boxes
+        Bro[i,:,:] = bro
+
+    return Bro
