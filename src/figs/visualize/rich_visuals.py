@@ -143,7 +143,7 @@ def get_student_summary(student:str,
     # Summary First Line
     student_field = f"Student: [bold cyan]{student}[/]"
     tepochs_field = f"Epochs: {Neps_tot}"
-    datsize_field = f"Data Size: {Nd_mean[0]}/{Nd_mean[1]}"
+    datsize_field = f"Data Size: {np.round(Nd_mean[0],2)}/{np.round(Nd_mean[1],2)}"
 
     summary = (
             f"{'-' * Nln}\n"
