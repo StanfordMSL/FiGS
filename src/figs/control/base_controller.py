@@ -48,6 +48,7 @@ class BaseController(ABC):
         Returns:
             ucr: Controller output.
             mcr: Current mode.
+            ccr: Current cost values.y
             tsol: Dictionary containing the solve times.
         """
         pass

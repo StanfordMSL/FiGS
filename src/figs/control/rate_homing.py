@@ -226,6 +226,7 @@ class RateHoming(BaseController):
         Returns:
             - ucr:  Control input.
             - mcr:  Current mode.
+            - ccr:  Current cost values.
             - tsol: Solve times dictionary with keys "setup_ocp" and "solve_ocp".
         """
 
@@ -269,11 +270,12 @@ class RateHoming(BaseController):
 
         # Assemble remainder of outputs
         mcr = self.mode.value
+        ccr = self.solver.get_cost()
         tsol = {"setup_ocp":t1-t0,
                 "solve_ocp":t2-t1
                 }
 
-        return ucr,mcr,tsol
+        return ucr,mcr,ccr,tsol
 
     def reset_controller(self,hard_reset:bool=True) -> None:
         """

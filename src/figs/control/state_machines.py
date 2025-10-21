@@ -18,8 +18,7 @@ from figs.visualize import rich_visuals as rv
 class bMode(Enum):
     RESET = 0
     APPROACH = 1
-    FINETUNE = 2
-    CONTACT = 3
+    CONTACT = 2
 
 def check_conditions( conditions:dict[str, float|None], tolerances:dict[str,float|None]):
     """
@@ -35,8 +34,8 @@ def check_conditions( conditions:dict[str, float|None], tolerances:dict[str,floa
             continue  # automatically true
         else:
             if isinstance(val, list):
-                if val[0] == "leq" and conditions[key] > val[1]:
+                if val[0] == "leq" and val[1] < conditions[key]:
                     return False
-                elif val[0] == "geq" and conditions[key] < val[1]:
+                elif val[0] == "geq" and val[1] > conditions[key]:
                     return False
     return True

@@ -234,6 +234,7 @@ class RatePolynomial(BaseController):
         Returns:
             - ucr:  Control input.
             - mcr:  Current mode (always 0).
+            - ccr:  Current cost values.
             - tsol: Solve times dictionary with keys "setup_ocp" and "solve_ocp".
         """
 
@@ -284,12 +285,14 @@ class RatePolynomial(BaseController):
                 ucr = self.solver.get(0, "u")
         t2 = time.time()
 
-        # Compute solve times
+        # Assemble remainder of outputs
+        mcr = 0
+        ccr = self.solver.get_cost()
         tsol = {"setup_ocp":t1-t0,
                 "solve_ocp":t2-t1
                 }
 
-        return ucr,0,tsol
+        return ucr,mcr,ccr,tsol
 
     def get_ydes(self,tcr:float,xcr:np.ndarray) -> np.ndarray:
         """

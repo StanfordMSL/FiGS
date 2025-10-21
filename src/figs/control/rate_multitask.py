@@ -98,9 +98,12 @@ class RateMultitask(BaseController):
         nmtr = frame["number_of_rotors"]
 
         # Course Parameters
-        WPs_cfg,Fs_cfg = course["waypoints"],course["forces"]
+        WPs_cfg,Fs_cfg,Objs_cfg = course["waypoints"],course["forces"],course["objects"]
+        fo_obj = np.zeros((4,4))
+        fo_obj[0:3,0] = np.array(Objs_cfg["button"]["position"])
+        
         fo0 = np.array(WPs_cfg["keyframes"]["fo0"]["fo"])
-        fof = np.array(WPs_cfg["keyframes"]["fo1"]["fo"])
+        fof = fo_obj
         t0,tf = WPs_cfg["keyframes"]["fo0"]["t"],WPs_cfg["keyframes"]["fo1"]["t"]
 
         # Desired Variables
@@ -114,9 +117,10 @@ class RateMultitask(BaseController):
         tXUd = np.vstack((txu0,txuf))                   # Complete desired trajectory
 
         # Mode Lock
+        modes_list = list(policy["track"]["states"].keys())
         if mode == "ALL":
             md_lock = False
-            mode_00,mode_0f = sm.bMode.RESET,sm.bMode.FINETUNE
+            mode_00,mode_0f = sm.bMode[modes_list[0]],sm.bMode[modes_list[-1]]
             mode_cr = sm.bMode.RESET
         else:
             md_lock = True
@@ -235,6 +239,7 @@ class RateMultitask(BaseController):
         Returns:
             - ucr:  Control input.
             - mcr:  Current mode.
+            - ccr:  Current cost values.
             - tsol: Solve times dictionary with keys "setup_ocp" and "solve_ocp".
         """
 
@@ -251,18 +256,20 @@ class RateMultitask(BaseController):
         self.update_ocp()
 
         t1 = time.time()
-        
         # Solve the OCP
         try:
             ucr = self.solver.solve_for_x0(xcr,print_stats_on_failure=False)
         except:
             if self.md_lock is False:
                 # First Fallback Strategy
-                self.reset_controller(sm.bMode.RESET,tcr,hard_reset=False)
+                self.reset_controller(sm.bMode.RESET,tcr,xcr,hard_reset=False)
                 self.update_ocp()
 
                 try:
                     ucr = self.solver.solve_for_x0(xcr,print_stats_on_failure=False)
+
+                    if self.debug:
+                        print("Solver recovered via RESET at time:",tcr)
                 except:
                     # Second Fallback Strategy
                     self.fb_count += 1
@@ -271,11 +278,11 @@ class RateMultitask(BaseController):
                     if self.fb_count >= self.fb_limit:
                         self.fb_fail = True
 
-                if self.debug:
-                    if self.fb_fail:
-                        print("Solver failed main fallback strategy at time:",tcr,". Using hover command.")
-                    else:
-                        print("Solver recovered via fallback strategy at time:",tcr,". Switching to",self.mode_cr.name,"mode.")
+                    if self.debug:
+                        print("Solver failed RESET fallback strategy at time:",tcr,". Using hover command.")
+                        if self.fb_fail:
+                            print("Solver failed main fallback strategy at time:",tcr)
+                        
             else:
                 # Fallback Strategy for Mode Locked Controllers
                 self.fb_count += 1
@@ -292,13 +299,17 @@ class RateMultitask(BaseController):
 
         # Assemble remainder of outputs
         mcr = self.mode_cr.value
+        ccr = self.solver.get_cost()
         tsol = {"setup_ocp":t1-t0,
                 "solve_ocp":t2-t1
                 }
 
-        return ucr,mcr,tsol
+        return ucr,mcr,ccr,tsol
 
-    def reset_controller(self,mode:sm.bMode=None,tcr:float=None,hard_reset:bool=True) -> None:
+    def reset_controller(self,
+                         mode:sm.bMode=None,
+                         tcr:float=None,xcr:np.ndarray=None,
+                         hard_reset:bool=True) -> None:
         """
         Method to reset the solver of the controller.
 
@@ -311,6 +322,8 @@ class RateMultitask(BaseController):
             mode = self.mode_00
         if tcr is None:
             tcr = 0.0
+        if xcr is None:
+            xcr = self.tXUd[0,1:11]
 
         # Reset the mode variables
         self.mode_cr = mode
@@ -323,7 +336,7 @@ class RateMultitask(BaseController):
 
             self.solver.set(i,"lam",0.0*lam)
             self.solver.set(i,"pi",0.0*pi)
-            self.solver.set(i,"x",self.tXUd[0,1:11])
+            self.solver.set(i,"x",xcr)
             self.solver.set(i,"u",self.uhov)
 
         self.solver.set(self.solver.acados_ocp.dims.N,"x",self.tXUd[0,1:11])
@@ -332,8 +345,8 @@ class RateMultitask(BaseController):
             self.fb_fail = False
             self.fb_count = 0
 
-        if self.debug:
-            print("Mode set to:",self.mode_cr.name)
+        # if self.debug:
+        #     print("Reset triggered. Switching to", self.mode_cr.name, "Mode at time:", tcr)
         
     def update_frame(self,frame:str|dict) -> None:
         """
@@ -375,19 +388,18 @@ class RateMultitask(BaseController):
         """
                 
         # Extract conditions and tolerances
-        mode_cr = self.mode_cr
         conditions = self.get_condition_values(tcr, xcr, fcr)
-        tolerances_dict = self.states[mode_cr.name]["tolerances"]
+        tolerances_dict = self.states[self.mode_cr.name]["tolerances"]
 
         # Update state machine
-        mode_upd = mode_cr
+        mode_pr = self.mode_cr
         for mode_name, tolerances in tolerances_dict.items():
             if sm.check_conditions(conditions, tolerances):
-                mode_upd = sm.bMode[mode_name]
+                self.mode_cr = sm.bMode[mode_name]
+                self.mode_t0 = tcr
                 break
-        self.mode_cr = mode_upd
-        
-        if self.debug and mode_cr != mode_upd:
+
+        if self.debug and mode_pr != self.mode_cr:
             print("Switching to", self.mode_cr.name, "Mode at time:", tcr)
 
         # Update forces
@@ -429,7 +441,8 @@ class RateMultitask(BaseController):
 
         # Extract State Variables
         state:dict[str,dict[str,list]] = self.states[self.mode_cr.name]
-        stagewise,terminal,offset = state["stagewise"],state["terminal"], state["offset"]
+        stagewise,terminal = state["stagewise"],state["terminal"]
+        pos_offset,vel_offset = state["pos_offset"],state["vel_offset"]
 
         # Assemble the weights
         W,We = [],[]
@@ -441,8 +454,8 @@ class RateMultitask(BaseController):
 
         W,We = np.diag(np.hstack(W)), np.diag(np.hstack(We))
         # Assemble the references
-        pt_p_ds = np.array(offset)
-        vb_b_ds = np.zeros(3)                           # Desired body velocity
+        pt_p_ds = np.array(pos_offset)                  # Desired probe to target position
+        vb_b_ds = np.array(vel_offset)                  # Desired body velocity
         head_ds = self.fof[3,0]                         # Desired heading
         uv_n_ds = np.zeros(2)                           # Desired normalized pixel coordinates
         ratt_ds = np.zeros(2)                           # Desired normalized pixel coordinates
