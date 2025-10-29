@@ -19,7 +19,7 @@ from figs.visualize import rich_visuals as rv
 class RateMultitask(BaseController):
     def __init__(self,
                  policy:str|dict,course:str|dict,frame:str|dict,
-                 mode:Literal["RESET","APPROACH","FINETUNE","ALL"]="ALL",
+                 mode:Literal["RESET","APPROACH","CONTACT","ALL","ALLc"]="ALL",
                  use_RTI:bool=False,
                  name:str="rate_multitask",
                  debug:bool=False) -> None:
@@ -118,7 +118,7 @@ class RateMultitask(BaseController):
 
         # Mode Lock
         modes_list = list(policy["track"]["states"].keys())
-        if mode == "ALL":
+        if mode == "ALL" or mode == "ALLc":
             md_lock = False
             mode_00,mode_0f = sm.bMode[modes_list[0]],sm.bMode[modes_list[-1]]
             mode_cr = sm.bMode.RESET
