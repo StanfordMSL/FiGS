@@ -103,46 +103,50 @@ def compute_flatoutputs(Tro:np.ndarray,Xro:np.ndarray,Uro:np.ndarray,
 
     return FO
 
-def compute_detectors(Tro:np.ndarray,Xro:np.ndarray,Obj:dict[str,dict[str,list[float|int]]],frame:dict[str,np.ndarray,str|int|float]) -> np.ndarray:
+def compute_object_data(Tro:np.ndarray,Xro:np.ndarray,
+                         obj:dict[str,dict[str,list[float|int]]],
+                         frame:dict[str,np.ndarray,str|int|float],
+                         Ndt:int=4,nMag:float=3.14,nOffset:float=16/256,nScale:float=224/256) -> np.ndarray:
     """
-    Computes the detection sequence given a trajectory rollout
+    Computes the id, localization and bounding box sequence given a trajectory rollout
 
     Args:
         Tro:    Time vector.
         Xro:    State vector.
-        Obj:    Objects to track.
+        obj:    Object to track.
         frame:  Frame configuration.
+        nMag:   Normalization magnitude.
     
     Returns:
-        Bro:    Detection sequence.
+        Ido:    Object IDs sequence.
+        Lro:    Localization sequence.
+        Bro:    Bounding box sequence.
     """
 
     # Extract some useful variables
-    Npt,Nbb = 3,4
     Tc2b = np.array(frame['camera_to_body_transform'])
     camera = frame['camera']
     fx,fy = camera["fx"],camera["fy"]
     cx,cy = camera["cx"],camera["cy"]
     nW,nH = camera["width"],camera["height"]
     Nro = Tro.shape[0]
-    Nobj = len(Obj)
 
     # Precompute some useful variables
     Tb2c = np.linalg.inv(Tc2b)
-
     Rb2c = Tb2c[:3,:3]
     pb_c = Tb2c[0:3,3].reshape((-1,1))
 
-    # Get object and bounding box positions
-    Pobjs = np.zeros((Nobj,Npt))
-    Pbbxs = np.zeros((Nobj,Nbb,Npt))
-    for i,obj in enumerate(Obj.values()):
-        Pobjs[i,:] = np.array(obj["position"])
-        Pbbxs[i,:,:] = Pobjs[i,:] + np.array(obj["boundary"])
+    # Get object and bounding box positions in world frame
+    pobj_w = np.array(obj["position"]).reshape((-1,1))
+    pbbx_w = (np.array(obj["position"]) + np.array(obj["boundary"])).T
+    o_id = obj["id"]
 
     # Compute bounding boxes
-    Bro = np.zeros((Nro,Nobj,1+Nbb))
+    Ido = np.zeros(Nro)
+    Lro = np.zeros((Nro,Ndt))
+    Bro = np.zeros((Nro,Ndt))
     for i in range(Nro):
+        # Extract drone pose
         pb_w = Xro[i,0:3].reshape((-1,1))
         qx,qy,qz,qw = Xro[i,6:10]
 
@@ -155,110 +159,34 @@ def compute_detectors(Tro:np.ndarray,Xro:np.ndarray,Obj:dict[str,dict[str,list[f
         Rw2b = Rb2w.T
         Rw2c = Rb2c@Rw2b
         
-        # Compute bounding boxes
-        bro = np.zeros_like(Bro[i,:,:])
-        for j in range(Nobj):
-            # Determine object and bounding box in camera frame
-            pobj_w = Pobjs[j,:].reshape((-1,1)) # Object position (3x1)
-            pbbx_w = Pbbxs[j,:,:].T             # Object bounding box (3x4)
-            pob_w = np.hstack((pobj_w,pbbx_w))  # Object + bounding box (3x5)
+        # Determine relative object position in camera frame
+        pob_w = np.hstack((pobj_w,pbbx_w))  # Object + bounding box (3x5)
+        rob_w = pob_w - pb_w                # Object + bounding box in world frame (3x5)
+        rob_c = Rw2c@rob_w+pb_c             # Object + bounding box in camera frame (3x5)
 
-            rob_w = pob_w - pb_w                # Object + bounding box in world frame (3x5)
-            rob_c = Rw2c@rob_w+pb_c             # Object + bounding box in camera frame (3x5)
-  
-            # Compute the pixel coordinates
-            UVob = np.zeros((2,5))
-            UVob[0,:] = fx*rob_c[0,:]/(rob_c[2,:]+1e-5)+cx
-            UVob[1,:] = fy*rob_c[1,:]/(rob_c[2,:]+1e-5)+cy
+        # Compute orientation metrics and normalize
+        rd_ob = np.linalg.norm(rob_c)
+        hd_ob = np.arctan2(2*(qw*qz + qx*qy), 1-2*(qy*qy + qz*qz))
+        az_ob = np.arctan2(rob_c[0,0],rob_c[2,0])
+        el_ob = np.arctan2(rob_c[1,0],rob_c[2,0])
 
-            # Normalize and account for center crop
-            offset,scale = 16/256,224/256
+        rd_n,hd_n = rd_ob/nMag,hd_ob/nMag
+        az_n,el_n = az_ob/nMag,el_ob/nMag
 
-            nUVob = np.zeros((2,5))
-            nUVob[0,:] = UVob[0,:]/nW
-            nUVob[1,:] = UVob[1,:]/nH
-            nUVob = (nUVob - offset)/scale
+        # Compute the pixel coordinates and normalize
+        Uob = fx*rob_c[0,:]/(rob_c[2,:]+1e-5)+cx
+        Vob = fy*rob_c[1,:]/(rob_c[2,:]+1e-5)+cy
 
-            # Check if object is visible
-            if 0.0 <= nUVob[0,0] <= 1.0 and 0.0 <= nUVob[1,0] <= 1.0 and rob_c[2,0] > 0.0:
-                bro[j,0] = 1.0                                    # Object is visible
-                bro[j,1] = nUVob[0,0]                             # Object center u
-                bro[j,2] = nUVob[1,0]                             # Object center v
-                bro[j,3] = np.max(nUVob[0,:])-np.min(nUVob[0,:])  # Object width
-                bro[j,4] = np.max(nUVob[1,:])-np.min(nUVob[1,:])  # Object height
-            
-        # Store the bounding boxes
-        Bro[i,:,:] = bro
+        nUob = (Uob/nW - nOffset)/nScale
+        nVob = (Vob/nH - nOffset)/nScale
 
-    return Bro
+        up_n,vp_n = nUob[0],nVob[0]
+        wp_n,hp_n = (np.max(nUob)-np.min(nUob)), (np.max(nVob)-np.min(nVob))
 
-def compute_localization(Tro:np.ndarray,Xro:np.ndarray,Obj:dict[str,dict[str,list[float|int]]],frame:dict[str,np.ndarray,str|int|float]) -> np.ndarray:
-    """
-    Computes the localization sequence given a trajectory rollout
+        # Check and store if object is visible
+        if ((0.0 <= up_n <= 1.0) and (0.0 <= vp_n <= 1.0) and (rob_c[2,0] > 0.0)):
+            Ido[i] = o_id
+            Lro[i,:] = np.array([rd_n,hd_n,az_n,el_n])
+            Bro[i,:] = np.array([up_n,vp_n,wp_n,hp_n])
 
-    Args:
-        Tro:    Time vector.
-        Xro:    State vector.
-        Obj:    Objects to track.
-        frame:  Frame configuration.
-    
-    Returns:
-        Lro:    Localization sequence.
-    """
-
-    # Extract some useful variables
-    Npt,Nbb = 3,4
-    Tc2b = np.array(frame['camera_to_body_transform'])
-    Nro = Tro.shape[0]
-    Nobj = len(Obj)
-
-    # Precompute some useful variables
-    Tb2c = np.linalg.inv(Tc2b)
-
-    Rb2c = Tb2c[:3,:3]
-    pb_c = Tb2c[0:3,3]
-
-    # Get object and bounding box positions
-    Pobjs = np.zeros((Nobj,Npt))
-    for j,obj in enumerate(Obj.values()):
-        Pobjs[j,:] = np.array(obj["position"])
-
-    # Compute bounding boxes
-    Lro = np.zeros((Nro,Nobj,Nbb))
-    for i in range(Nro):
-        pb_w = Xro[i,0:3]
-        qx,qy,qz,qw = Xro[i,6:10]
-
-        # Compute rotation matrix from quaternion
-        Rb2w = np.array([
-            [1.0-2.0*(qy**2+qz**2), 2.0*(qx*qy-qw*qz), 2.0*(qx*qz+qw*qy)],
-            [2.0*(qx*qy+qw*qz), 1.0-2*(qx**2+qz**2), 2.0*(qy*qz-qw*qx)],
-            [2.0*(qx*qz-qw*qy), 2.0*(qy*qz+qw*qx), 1.0-2.0*(qx**2+qy**2)]]
-        )
-        Rw2b = Rb2w.T
-        Rw2c = Rb2c@Rw2b
-        
-        # Compute bounding boxes
-        lro = np.zeros_like(Lro[i,:,:])
-        for j in range(Nobj):
-            # Compute camera frame states
-            rob_w = Pobjs[j,:] - pb_w           # Object in world frame (3,)
-            rob_c = Rw2c@rob_w+pb_c             # Object in camera frame (3,)
-            
-            # Compute orientation metrics
-            rdis = np.linalg.norm(rob_c)
-            head = np.arctan2(2*(qw*qz + qx*qy), 1-2*(qy*qy + qz*qz))
-            azim = np.arctan2(rob_c[0],rob_c[2])
-            elev = np.arctan2(rob_c[1],rob_c[2])
-
-            # Check if object is visible
-            nMag = 3.14
-            lro[j,0] = rdis/nMag
-            lro[j,1] = head/nMag
-            lro[j,2] = azim/nMag
-            lro[j,3] = elev/nMag
-
-        # Store the bounding boxes
-        Lro[i,:,:] = lro
-
-    return Lro
+    return Ido,Lro,Bro

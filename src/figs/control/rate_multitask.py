@@ -98,9 +98,9 @@ class RateMultitask(BaseController):
         nmtr = frame["number_of_rotors"]
 
         # Course Parameters
-        WPs_cfg,Fs_cfg,Objs_cfg = course["waypoints"],course["forces"],course["objects"]
+        WPs_cfg,Fs_cfg,Obj_cfg = course["waypoints"],course["forces"],course["object"]
         fo_obj = np.zeros((4,4))
-        fo_obj[0:3,0] = np.array(Objs_cfg["button"]["position"])
+        fo_obj[0:3,0] = np.array(Obj_cfg["position"])
         
         fo0 = np.array(WPs_cfg["keyframes"]["fo0"]["fo"])
         fof = fo_obj
