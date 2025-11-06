@@ -106,9 +106,7 @@ def compute_flatoutputs(Tro:np.ndarray,Xro:np.ndarray,Uro:np.ndarray,
 def compute_object_data(Tro:np.ndarray,Xro:np.ndarray,
                          obj:dict[str,dict[str,list[float|int]]],
                          frame:dict[str,np.ndarray,str|int|float],
-                         Ndt:int=4,nMag:float=3.14,
-                         rsW:int=256,rsH:int=256,
-                         crW:int=224,crH:int=224) -> np.ndarray:
+                         Ndt:int=4,nMag:float=3.14,nScale:float=2.0) -> np.ndarray:
     """
     Computes the id, localization and bounding box sequence given a trajectory rollout
 
@@ -119,10 +117,7 @@ def compute_object_data(Tro:np.ndarray,Xro:np.ndarray,
         frame:  Frame configuration.
         Ndt:    Number of localization/bounding box dimensions.
         nMag:   Normalization magnitude.
-        rsW:    Resized image width.
-        rsH:    Resized image height.
-        crW:    Cropped image width.
-        crH:    Cropped image height.
+        nScale: Normalization scale for images.
     
     Returns:
         Ido:    Object IDs sequence.
@@ -183,17 +178,13 @@ def compute_object_data(Tro:np.ndarray,Xro:np.ndarray,
         # Compute the pixel coordinates and pixel dimensions of bounding box
         Uob = fx*rob_c[0,:]/(rob_c[2,:]+1e-5)+cx
         Vob = fy*rob_c[1,:]/(rob_c[2,:]+1e-5)+cy
-        
-        # Pass through feature extraction normalization
-        rsUob,rsVob = Uob * (rsW / nW), Vob * (rsH / nH)
-        crUob,crVob = rsUob - (rsW - crW) / 2, rsVob - (rsH - crH) / 2
-        
+        wob = np.max(Uob) - np.min(Uob)
+        hob = np.max(Vob) - np.min(Vob)
+
         # Normalize to [0,1] for locNet
-        nUob,nVob = crUob / crW, crVob / crH
-        
-        up_n,vp_n = nUob[0], nVob[0]
-        wp_n,hp_n = np.max(nUob) - np.min(nUob), np.max(nVob) - np.min(nVob)
-    
+        up_n,vp_n = Uob[0]/(nScale*nW), Vob[0]/(nScale*nH)
+        wp_n,hp_n = wob/(nScale*nW),hob/(nScale*nH)
+
         wp_n = np.clip(wp_n,0.0,1.0)
         hp_n = np.clip(hp_n,0.0,1.0)
 
@@ -202,5 +193,5 @@ def compute_object_data(Tro:np.ndarray,Xro:np.ndarray,
             Ido[i] = o_id
             Lro[i,:] = np.array([rd_n,hd_n,az_n,el_n])
             Bro[i,:] = np.array([up_n,vp_n,wp_n,hp_n])
-
+            
     return Ido,Lro,Bro
