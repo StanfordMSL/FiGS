@@ -144,9 +144,9 @@ def compute_object_data(Tro:np.ndarray,Xro:np.ndarray,
     o_id = obj["id"]
 
     # Compute bounding boxes
-    Ido = np.zeros(Nro)
-    Lro = np.zeros((Nro,Ndt))
-    Bro = np.zeros((Nro,Ndt))
+    Ido = np.zeros(Nro)         # Object IDs
+    Lro = np.zeros((Nro,Ndt))   # Localization data
+    Bro = np.zeros((Nro,Ndt))   # Bounding box data
     for i in range(Nro):
         # Extract drone pose
         pb_w = Xro[i,0:3].reshape((-1,1))

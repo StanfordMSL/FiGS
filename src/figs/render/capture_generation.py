@@ -80,7 +80,7 @@ def generate_gsplat(scene_file_name:str,capture_cfg_name:str='default',
         tfm_data = json.load(f)
     
     sparse_pcloud = o3d.io.read_point_cloud(sfm_spc_path.as_posix())
-    
+
     # Use sfm config if camera config is not provided
     if camera_config is None:
         fx,fy = tfm_data["fl_x"],tfm_data["fl_y"]
@@ -149,7 +149,7 @@ def generate_gsplat(scene_file_name:str,capture_cfg_name:str='default',
     else:
         print("Command failed.")
         print(result.stderr)  # Error output
-
+    
 def extract_frames(video_path:Path,rgbs_path:Path,
                    extractor_config:Dict['str',Union[int,float]]) -> List[np.ndarray]:
     """
