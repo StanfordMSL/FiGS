@@ -39,33 +39,52 @@ def solve(fout_wps:Dict[str,Union[int,Tuple[np.float64,np.ndarray]]],Natt=5) -> 
     P,q = Pq_gen(Tp,Nco)                                           # Min Snap Cost
     A,b = Ab_gen(Tp,FOp,Nco)                                       # Keyframe Constraints
 
+    # Regularize P to ensure strict positive-definiteness (helps ill-conditioned problems)
+    n = P.shape[0]
+    P += 1e-8 * np.eye(n)
+
     # Convert to Sparse
-    P = sps.csc_matrix(P)
-    A = sps.csc_matrix(A)
+    P_sp = sps.csc_matrix(P)
+    A_sp = sps.csc_matrix(A)
 
-    # Solve QP to get coefficient solution (spline variables)
-    for attempt in range(Natt):
-        try:
-            sigma = qpsolvers.solve_qp(P,q,G=None,h=None,A=A,b=b,
-                                    solver="osqp")       # Solve QP
-            SM = sigma.reshape((-1,Nfo,Nco))                                # Reshape to match keyframes
-            
-            Nsm = SM.shape[0]
-            TT = np.zeros((Nsm,Nco))
-            for i in range(0,Nsm):
-                TT[i,:] = np.linspace(Tp[i],Tp[i+1],Nco)
-            
-            Tps = np.array(Tp)
-            CPs = SM2CP(SM,TT,Nco)
+    # Solver-specific keyword arguments
+    solver_kwargs = {
+        "clarabel": {},
+        "proxqp":   {"max_iter": 20000, "eps_abs": 1e-7},
+        "osqp":     {"max_iter": 20000, "eps_abs": 1e-7, "eps_rel": 1e-7, "polish": True},
+        "scs":      {"max_iters": 20000, "eps_abs": 1e-7, "eps_rel": 1e-7},
+    }
 
-            return Tps,CPs
-        
-        except:
-            print(f"Minimum Snap Trajectory Solve Failed (Attempt {attempt + 1}) failed. Retrying...")
-            if attempt == Natt - 1:
-                print("All attempts failed.")
-                
-                return None
+    solver_priority = ["clarabel", "proxqp", "osqp", "scs"]
+    solvers_to_try = [s for s in solver_priority if s in qpsolvers.available_solvers]
+
+    for solver_name in solvers_to_try:
+        kwargs = solver_kwargs.get(solver_name, {})
+        for attempt in range(Natt):
+            try:
+                sigma = qpsolvers.solve_qp(P_sp,q,G=None,h=None,A=A_sp,b=b,
+                                        solver=solver_name, **kwargs)
+                if sigma is None:
+                    raise RuntimeError(f"{solver_name} returned None")
+                SM = sigma.reshape((-1,Nfo,Nco))
+
+                Nsm = SM.shape[0]
+                TT = np.zeros((Nsm,Nco))
+                for i in range(0,Nsm):
+                    TT[i,:] = np.linspace(Tp[i],Tp[i+1],Nco)
+
+                Tps = np.array(Tp)
+                CPs = SM2CP(SM,TT,Nco)
+
+                return Tps,CPs
+
+            except Exception as e:
+                print(f"Min-snap solve failed ({solver_name}, attempt {attempt + 1}/{Natt}): {e}")
+
+        print(f"All {Natt} attempts exhausted for solver '{solver_name}', trying next...")
+
+    print("All solvers failed.")
+    return None
     
 def Pq_gen(Tp:List[np.float64],Nco:int) -> Tuple[np.ndarray,np.ndarray]:
     # Unpack some stuff

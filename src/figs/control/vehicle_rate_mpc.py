@@ -102,7 +102,7 @@ class VehicleRateMPC(BaseController):
 
         # Solve Padded Trajectory
         output = ms.solve(traj_config_pd)
-        if output is not False:
+        if output is not None:
             Tpi, CPi = output
         else:
             raise ValueError("Padded trajectory (for VehicleRateMPC) not feasible. Aborting.")

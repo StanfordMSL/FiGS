@@ -174,7 +174,7 @@ class Simulator:
     
     def simulate(self,policy:Type[BaseController],
                  t0:float,tf:int,x0:np.ndarray,obj:Union[None,np.ndarray]=None
-                 ) -> Tuple[np.ndarray,np.ndarray,np.ndarray,np.ndarray,np.ndarray,np.ndarray]:
+                 ) -> Tuple[np.ndarray,np.ndarray,np.ndarray,np.ndarray,np.ndarray,np.ndarray,np.ndarray]:
         """
         Simulates the flight.
 
@@ -216,6 +216,7 @@ class Simulator:
         # Rollout Variables
         Tro,Xro,Uro = np.zeros(Nctl+1),np.zeros((nx,Nctl+1)),np.zeros((nu,Nctl))
         Iro = np.zeros((Nctl,height,width,channels),dtype=np.uint8)
+        Tco = np.zeros((Nctl,4,4))
         Xro[:,0] = x0
 
         # Diagnostics Variables
@@ -241,6 +242,7 @@ class Simulator:
                 # Get current image
                 Tb2w = th.xv_to_T(xcr)
                 T_c2w = Tb2w@T_c2b
+                T_c2g = self.gsplat.T_w2g@T_c2w@self.gsplat.T_w2g
                 icr = self.gsplat.render_rgb(camera,T_c2w)
 
                 # Add sensor noise and syncronize estimated state
@@ -278,6 +280,7 @@ class Simulator:
                 k = i//n_sim2ctl
 
                 Iro[k,:,:,:] = icr
+                Tco[k,:,:] = T_c2g
                 Tro[k] = tcr
                 Xro[:,k+1] = xcr
                 Uro[:,k] = ucm
@@ -287,4 +290,4 @@ class Simulator:
         # Log final time
         Tro[Nctl] = t0+Nsim/hz_sim
 
-        return Tro,Xro,Uro,Iro,Tsol,Adv
+        return Tro,Xro,Uro,Iro,Tsol,Adv,Tco
